@@ -23,34 +23,33 @@ Inbox ──[人間がドラッグ]──> Ready ──> In Progress ──> Ver
 
 ## セットアップ
 
-### 1. GitHub 側 (Project の作成)
+### 1. GitHub 側の準備
 
-**`autopilot setup-project`** コマンドを使うと、7 つのステータス（カラー付き）を備えた Projects v2 を一発で作成できる:
+1. **Project の作成**:
+   GitHub の Web UI 等で Projects v2 を作成します（テンプレートは「Iterative development」や「Board」等を選択）。
 
-```sh
-# 認証トークンの設定 (classic PAT: repo, project スコープが必要)
-export GH_TOKEN=ghp_xxxxxxxxxxxx
+2. **認証トークンの設定** (classic PAT: `repo`, `project` スコープが必要):
+   ```sh
+   export GH_TOKEN=ghp_xxxxxxxxxxxx
+   ```
 
-# Project の作成 (個人アカウントの場合)
-go run ./cmd/autopilot setup-project --title "Autopilot Board"
+3. **設定ファイルの準備**:
+   ```sh
+   cp config.example.yaml config.yaml
+   $EDITOR config.yaml   # project.owner / project.number / repos などを設定
+   ```
 
-# Organization 配下に作成する場合
-# go run ./cmd/autopilot setup-project --owner my-org --owner-type organization --title "Autopilot Board"
-```
+4. **Status 選択肢のセットアップ**:
+   `autopilot setup-project` を実行すると、`config.yaml` で指定した対象 Project に autopilot の 7 つのステータス（カラー・説明付き）が一括で設定・修復されます:
+   ```sh
+   go run ./cmd/autopilot setup-project
+   ```
 
-コマンド完了時に表示される `project:` 設定スニペットを、`config.yaml` にそのまま貼り付ければ完了です。
+5. **Project の組み込みワークフローを有効化**:
+   - Project の **Auto-add workflow** を有効にする（対象リポジトリの Issue が自動でカード化される）
+   - Project の組み込みワークフロー **「Item closed → Status: Done」** を有効にする
 
-- Project の **Auto-add workflow** を有効にする（Issue が自動でカード化される）
-- Project の組み込みワークフロー **「Item closed → Status: Done」** を有効にする
-
-### 2. 設定
-
-```sh
-cp config.example.yaml config.yaml
-$EDITOR config.yaml   # project.owner / project.number / repos を書き換える
-```
-
-### 3. 検証と起動
+### 2. 検証と起動
 
 ```sh
 go build -o autopilot ./cmd/autopilot
@@ -80,6 +79,7 @@ go build -o autopilot ./cmd/autopilot
 
 | コマンド | 役割 |
 |---|---|
+| `autopilot setup-project` | GitHub Projects v2 に 7 つの Status 選択肢を設定・修復 |
 | `autopilot run` | 常駐してパイプラインを回す |
 | `autopilot init` | コールドスタートのシード |
 | `autopilot status` | ローカル状態（Status / PR / ブランチ / リトライ回数）の一覧 |

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -35,7 +34,7 @@ const usage = `autopilot - 自動開発パイプラインの常駐ワーカー
   init            コールドスタートのシードを行う（現在を処理済みとして記録する）
   status          ローカル状態を一覧表示する
   doctor          設定と前提条件を検証して終了する
-  setup-project   GitHub Projects v2 を作成し、7 つの Status 選択肢を設定する
+  setup-project   GitHub Projects v2 に 7 つの Status 選択肢を設定・修復する
 
 共通フラグ:
   -c, --config <path>   設定ファイル（既定: config.yaml）
@@ -62,11 +61,6 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	// setup-project は設定ファイルなしで単独実行できる。
-	if cmd == "setup-project" {
-		return cmdSetupProject(ctx, os.Args[2:])
-	}
 
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	var cfgPath string
@@ -99,119 +93,34 @@ func run() error {
 		return cmdStatus(ctx, cfg, log)
 	case "doctor":
 		return cmdDoctor(ctx, cfg, log)
+	case "setup-project":
+		return cmdSetupProject(ctx, cfg, log)
 	default:
 		fmt.Print(usage)
 		return fmt.Errorf("未知のコマンド: %s", cmd)
 	}
 }
 
-func cmdSetupProject(ctx context.Context, args []string) error {
-	flags := flag.NewFlagSet("setup-project", flag.ExitOnError)
-	var title, owner, ownerType, fieldName, cfgPath string
-	var forceNew, verbose bool
-	flags.StringVar(&cfgPath, "config", "config.yaml", "設定ファイルのパス")
-	flags.StringVar(&cfgPath, "c", "config.yaml", "設定ファイルのパス（短縮形）")
-	flags.StringVar(&title, "title", "Autopilot Board", "作成するプロジェクトのタイトル（新規作成時）")
-	flags.StringVar(&owner, "owner", "", "GitHub オーナー名（未指定なら設定ファイルまたは認証ユーザー）")
-	flags.StringVar(&ownerType, "owner-type", "", "オーナーの種別: user または organization")
-	flags.StringVar(&fieldName, "field", "", "Status を管理するフィールド名")
-	flags.BoolVar(&forceNew, "new", false, "設定ファイルの Project 番号を無視して新規作成する")
-	flags.BoolVar(&verbose, "verbose", false, "解決したパラメータを表示する")
-	flags.BoolVar(&verbose, "v", false, "解決したパラメータを表示する（短縮形）")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if ownerType != "" && ownerType != "user" && ownerType != "organization" {
-		return fmt.Errorf("--owner-type は user か organization を指定してください（指定値: %q）", ownerType)
-	}
-
+func cmdSetupProject(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	client, err := gh.New()
 	if err != nil {
 		return err
 	}
 
-	// 設定ファイルは「無い」なら新規作成に進むが、「壊れている」なら止める。
-	// 区別しないと、agents のキーを打ち間違えただけで既存 Project の修復のつもりが
-	// 新しい Project の作成にすり替わってしまう。
-	cfg, cfgErr := config.Load(cfgPath)
-	if cfgErr != nil && !errors.Is(cfgErr, fs.ErrNotExist) && !forceNew {
-		return fmt.Errorf("設定ファイル %s を読めません: %w\n"+
-			"  設定を直すか、新しい Project を作るなら --new を付けてください", cfgPath, cfgErr)
-	}
-	if verbose {
-		if cfgErr != nil {
-			fmt.Printf("[verbose] 設定ファイル %s は見つかりませんでした\n", cfgPath)
-		} else {
-			fmt.Printf("[verbose] 設定ファイル %s を読み込みました (project: %s/%d)\n",
-				cfgPath, cfg.Project.Owner, cfg.Project.Number)
-		}
-	}
+	owner := cfg.Project.Owner
+	ownerType := cfg.Project.OwnerType
+	number := cfg.Project.Number
+	fieldName := cfg.Project.StatusField
 
-	if cfgErr == nil && !forceNew && cfg.Project.Number > 0 {
-		// --- 既存 Project の修復モード ---
-		if owner == "" {
-			owner = cfg.Project.Owner
-		}
-		if ownerType == "" {
-			ownerType = cfg.Project.OwnerType
-		}
-		if fieldName == "" {
-			fieldName = cfg.Project.StatusField
-		}
-		fmt.Printf("既存の Project %s/%d の Status 選択肢を修復・設定しています...\n", owner, cfg.Project.Number)
-		projectID, err := client.GetProjectID(ctx, ownerType, owner, cfg.Project.Number)
-		if err != nil {
-			return fmt.Errorf("Project の取得に失敗: %w", err)
-		}
-		if err := client.ConfigureProjectStatuses(ctx, projectID, fieldName, nil); err != nil {
-			return err
-		}
-		fmt.Printf("\n✨ Project %s/%d の Status 選択肢（7ステータス）を正常に設定・修復しました！\n", owner, cfg.Project.Number)
-		return nil
-	}
-
-	// --- 新規作成モード ---
-	if owner == "" {
-		if cfgErr == nil && cfg.Project.Owner != "" {
-			owner = cfg.Project.Owner
-		} else {
-			if err := client.ResolveLogin(ctx); err != nil {
-				return fmt.Errorf("認証ユーザーの取得に失敗: %w", err)
-			}
-			owner = client.Login
-		}
-	}
-	if ownerType == "" {
-		if cfgErr == nil && cfg.Project.OwnerType != "" {
-			ownerType = cfg.Project.OwnerType
-		} else {
-			ownerType = "user"
-		}
-	}
-	if fieldName == "" {
-		fieldName = "Status"
-	}
-
-	fmt.Printf("GitHub Projects v2 を新規作成しています (owner: %s, type: %s, title: %q)...\n", owner, ownerType, title)
-	info, err := client.CreateProjectWithStatuses(ctx, ownerType, owner, title, fieldName, nil)
+	fmt.Printf("Project %s/%d の Status 選択肢（7ステータス）を設定・修復しています...\n", owner, number)
+	projectID, err := client.GetProjectID(ctx, ownerType, owner, number)
 	if err != nil {
-		// Project 自体は作成済みのことがある。番号を伝えないと、リトライのたびに
-		// 空の Project が増え続けてしまう。
-		if info != nil && info.Number > 0 {
-			fmt.Printf("\n⚠️  Project #%d は作成されましたが、Status 選択肢の設定に失敗しました。\n", info.Number)
-			fmt.Printf("    URL: %s\n", info.URL)
-			fmt.Printf("    修復するには config.yaml に number: %d を設定して `autopilot setup-project` を再実行してください。\n", info.Number)
-			fmt.Printf("    （--new を付けると別の Project が新規作成されます）\n\n")
-		}
+		return fmt.Errorf("Project の取得に失敗: %w", err)
+	}
+	if err := client.ConfigureProjectStatuses(ctx, projectID, fieldName, nil); err != nil {
 		return err
 	}
-
-	fmt.Printf("\n✨ GitHub Projects v2 のセットアップが完了しました！\n\n")
-	fmt.Printf("  プロジェクト番号: #%d\n", info.Number)
-	fmt.Printf("  URL:             %s\n\n", info.URL)
-	fmt.Printf("以下の設定を config.yaml の project セクションに貼り付けてください:\n\n")
-	fmt.Printf("```yaml\nproject:\n  owner: \"%s\"\n  number: %d\n  owner_type: \"%s\"\n  status_field: \"%s\"\n```\n",
-		owner, info.Number, ownerType, fieldName)
+	fmt.Printf("\n✨ Project %s/%d の Status 選択肢（7ステータス）を正常に設定・修復しました！\n", owner, number)
 	return nil
 }
 

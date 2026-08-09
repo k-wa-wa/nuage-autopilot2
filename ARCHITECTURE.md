@@ -232,6 +232,7 @@ CLI ごとの起動方法の違い（プロンプトを標準入力で渡すか 
 
 | コマンド | 役割 |
 |---|---|
+| `autopilot setup-project` | GitHub Projects v2 に 7 つの Status 選択肢を設定・修復 |
 | `autopilot run` | 常駐してパイプラインを回す |
 | `autopilot init` | コールドスタートのシード（現在を処理済みとして記録） |
 | `autopilot status` | ローカル状態の一覧表示 |
