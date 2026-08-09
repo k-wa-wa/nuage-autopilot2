@@ -743,6 +743,49 @@ func TestScenario_OwnInlineComment_DoesNotWake(t *testing.T) {
 	}
 }
 
+// シナリオ 3d: PR の Conversation タブに投稿された通常コメントも起床トリガーになる。
+func TestScenario_PRConversationComment_TriggersTriage(t *testing.T) {
+	fake := &fakeGitHub{
+		prState:      "OPEN",
+		prCheckState: "SUCCESS",
+		linkedPRNum:  2,
+		issueComments: []gh.Comment{
+			{ID: 301, Body: "URL にアクセスできません。原因を調べてください。", User: gh.User{Login: "reviewer-san"}},
+		},
+	}
+	e, _, cleanup := setupTestEngine(t, fake, "#!/bin/sh\ncat > /dev/null\n")
+	defer cleanup()
+
+	ctx := context.Background()
+	e.st.Upsert(&store.Item{
+		Repo: "owner/repo", IssueNumber: 1, ProjectItemID: "item_1",
+		LastStatus: "👀 In Review", PRNumber: 2,
+	})
+
+	if err := e.handleReview(ctx, Event{Kind: EvReview, Repo: "owner/repo", Issue: 1}); err != nil {
+		t.Fatalf("handleReview failed: %v", err)
+	}
+
+	job := mustJob(t, e, PhaseTriageReview)
+	if len(job.Inputs) != 1 || !strings.Contains(job.Inputs[0], "URL にアクセスできません") {
+		t.Fatalf("Inputs に PR 会話コメントが含まれていません: %v", job.Inputs)
+	}
+
+	if got, _ := e.st.Cursor("pr-comment:owner/repo#2"); got != "301" {
+		t.Errorf("PR コメントのカーソル = %q, want 301", got)
+	}
+
+	// 2 回目は新規が無いので起床しない。
+	if err := e.handleReview(ctx, Event{Kind: EvReview, Repo: "owner/repo", Issue: 1}); err != nil {
+		t.Fatalf("2 回目の handleReview failed: %v", err)
+	}
+	select {
+	case job := <-e.jobs:
+		t.Fatalf("処理済みの PR コメントで再度起床しました: %+v", job)
+	default:
+	}
+}
+
 func mustJob(t *testing.T, e *Engine, phase string) Job {
 	t.Helper()
 	select {

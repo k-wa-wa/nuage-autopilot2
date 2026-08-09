@@ -247,11 +247,11 @@ func (e *Engine) handleComment(ctx context.Context, ev Event) error {
 	return nil
 }
 
-// handleReview は PR に届いたレビューを判定する。
+// handleReview は PR に届いたレビューおよび会話コメントを判定する。
 //
-// 起床トリガーはレビュー提出の本文と diff のインラインコメントの両方。サマリを書かず
-// 行コメントだけを送るレビューは珍しくないため、本文の有無だけで判定すると指摘を
-// まるごと取りこぼす。両者は所属レビュー単位にまとめ、1 レビュー = 1 入力にする。
+// 起床トリガーは PR Conversation 上の通常コメント、レビュー提出の本文、および
+// diff のインラインコメント。サマリを書かず行コメントだけを送るレビューや、
+// レビュー機能を使わずに会話欄にコメントするケースも確実に拾う。
 func (e *Engine) handleReview(ctx context.Context, ev Event) error {
 	it, err := e.load(ev.Repo, ev.Issue)
 	if err != nil || it == nil || it.Terminal || it.PRNumber == 0 {
@@ -260,14 +260,19 @@ func (e *Engine) handleReview(ctx context.Context, ev Event) error {
 	if it.LastStatus != e.cfg.Statuses.InReview {
 		return nil
 	}
-	// レビューと行コメントは別の ID 空間なので、カーソルも別々に持つ。
+	// レビュー、行コメント、PR 会話コメントは別の ID 空間なので、カーソルも別々に持つ。
 	reviewCK := fmt.Sprintf("review:%s#%d", it.Repo, it.PRNumber)
 	inlineCK := fmt.Sprintf("review-comment:%s#%d", it.Repo, it.PRNumber)
+	commentCK := fmt.Sprintf("pr-comment:%s#%d", it.Repo, it.PRNumber)
 	lastReview, err := e.cursorID(reviewCK)
 	if err != nil {
 		return err
 	}
 	lastInline, err := e.cursorID(inlineCK)
+	if err != nil {
+		return err
+	}
+	lastComment, err := e.cursorID(commentCK)
 	if err != nil {
 		return err
 	}
@@ -277,6 +282,10 @@ func (e *Engine) handleReview(ctx context.Context, ev Event) error {
 		return err
 	}
 	inline, err := e.client.ListReviewComments(ctx, it.Repo, it.PRNumber)
+	if err != nil {
+		return err
+	}
+	comments, err := e.client.ListComments(ctx, it.Repo, it.PRNumber, time.Time{})
 	if err != nil {
 		return err
 	}
@@ -341,7 +350,22 @@ func (e *Engine) handleReview(ctx context.Context, ev Event) error {
 		inputs = append(inputs, formatReviewInput(notes[0].User.Login, "", "", notes))
 	}
 
-	if maxReview == lastReview && maxInline == lastInline {
+	// PR の Conversation タブに投稿された通常コメント。
+	maxComment := lastComment
+	for _, c := range comments {
+		if c.ID <= lastComment {
+			continue
+		}
+		if c.ID > maxComment {
+			maxComment = c.ID
+		}
+		if c.User.Login == e.client.Login || c.User.IsBot() || strings.TrimSpace(c.Body) == "" {
+			continue
+		}
+		inputs = append(inputs, fmt.Sprintf("@%s:\n%s", c.User.Login, strings.TrimSpace(c.Body)))
+	}
+
+	if maxReview == lastReview && maxInline == lastInline && maxComment == lastComment {
 		return nil
 	}
 	advance := func() error {
@@ -351,7 +375,12 @@ func (e *Engine) handleReview(ctx context.Context, ev Event) error {
 			}
 		}
 		if maxInline != lastInline {
-			return e.st.SetCursor(inlineCK, strconv.FormatInt(maxInline, 10))
+			if err := e.st.SetCursor(inlineCK, strconv.FormatInt(maxInline, 10)); err != nil {
+				return err
+			}
+		}
+		if maxComment != lastComment {
+			return e.st.SetCursor(commentCK, strconv.FormatInt(maxComment, 10))
 		}
 		return nil
 	}
@@ -373,7 +402,7 @@ func formatReviewInput(author, state, body string, notes []gh.ReviewComment) str
 		fmt.Fprintf(&b, "@%s:", author)
 	}
 	if body != "" {
-		b.WriteString("\n" + body)
+		_, _ = b.WriteString("\n" + body)
 	}
 	for _, n := range notes {
 		fmt.Fprintf(&b, "\n\n- `%s`\n  %s", n.Location(), strings.TrimSpace(n.Body))
