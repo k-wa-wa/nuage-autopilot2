@@ -14,11 +14,10 @@ import (
 )
 
 const (
-	restBase    = "https://api.github.com"
-	graphqlURL  = "https://api.github.com/graphql"
-	userAgent   = "autopilot"
-	apiVersion  = "2022-11-28"
-	defaultWait = 30 * time.Second
+	defaultRestBase   = "https://api.github.com"
+	defaultGraphQLURL = "https://api.github.com/graphql"
+	userAgent         = "autopilot"
+	apiVersion        = "2022-11-28"
 )
 
 // Client は GitHub API クライアント。
@@ -27,6 +26,9 @@ type Client struct {
 	http  *http.Client
 	// Login は認証しているアカウントのログイン名。自分の発言を無視するために使う。
 	Login string
+	// baseURL / graphqlURL は空なら本番のエンドポイントを使う。テストで差し替える。
+	baseURL    string
+	graphqlURL string
 }
 
 // New はトークンを環境変数（GH_TOKEN / GITHUB_TOKEN）から取得してクライアントを作る。
@@ -35,11 +37,34 @@ func New() (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("GH_TOKEN または GITHUB_TOKEN が未設定です（Projects v2 を操作するため classic PAT の project スコープが必要）")
 	}
-	c := &Client{
+	return &Client{
 		token: token,
 		http:  &http.Client{Timeout: 60 * time.Second},
+	}, nil
+}
+
+// NewForTest はエンドポイントを差し替えた Client を作る。テストからのみ使う。
+func NewForTest(token, baseURL, gqlURL string) *Client {
+	return &Client{
+		token:      token,
+		http:       &http.Client{Timeout: 10 * time.Second},
+		baseURL:    baseURL,
+		graphqlURL: gqlURL,
 	}
-	return c, nil
+}
+
+func (c *Client) restBaseURL() string {
+	if c.baseURL != "" {
+		return c.baseURL
+	}
+	return defaultRestBase
+}
+
+func (c *Client) gqlURL() string {
+	if c.graphqlURL != "" {
+		return c.graphqlURL
+	}
+	return defaultGraphQLURL
 }
 
 // Token は保持しているトークンを返す。子プロセス（gh / git）へ引き渡すために使う。
@@ -68,7 +93,7 @@ func (c *Client) rest(ctx context.Context, method, path string, body any, out an
 func (c *Client) restWithHeader(ctx context.Context, method, path string, body any, out any) (http.Header, error) {
 	url := path
 	if !strings.HasPrefix(path, "http") {
-		url = restBase + path
+		url = c.restBaseURL() + path
 	}
 	var rdr io.Reader
 	if body != nil {
@@ -123,7 +148,7 @@ func (c *Client) graphql(ctx context.Context, query string, vars map[string]any,
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, graphqlURL, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.gqlURL(), bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
