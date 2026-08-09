@@ -653,7 +653,24 @@ func (e *Engine) execute(ctx context.Context, j Job, it *store.Item) (*agent.Res
 	default:
 		return nil, fmt.Errorf("未知のフェーズ: %s", j.Phase)
 	}
-	return e.runner.Run(ctx, e.cfg.AgentFor(kind).Spec(), j.Phase, e.ws.Path(it.Repo), text)
+
+	spec := e.cfg.AgentFor(kind).Spec()
+	attrs := []any{
+		"phase", j.Phase,
+		"repo", j.Repo,
+		"issue", j.Issue,
+		"command", spec.ResolvedCommand(),
+		"adapter", spec.Adapter().Name(),
+		"timeout", spec.Timeout,
+	}
+	if branch != "" {
+		attrs = append(attrs, "branch", branch)
+	}
+	if spec.Model != "" {
+		attrs = append(attrs, "model", spec.Model)
+	}
+	e.log.Info("エージェントを起動します", attrs...)
+	return e.runner.Run(ctx, spec, j.Phase, e.ws.Path(it.Repo), text)
 }
 
 // applyResult はエージェントのマーカー出力を状態遷移に変換する。

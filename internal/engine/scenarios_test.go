@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -791,6 +792,54 @@ cat > /dev/null
 	item, _ := e.st.Get("owner/repo", 1)
 	if !item.Terminal {
 		t.Errorf("Terminal = false, want true")
+	}
+}
+
+// エージェント起動時と停止時にログが出力されることを検証
+func TestAgentStartupLogs(t *testing.T) {
+	fake := &fakeGitHub{
+		prState:      "OPEN",
+		prCheckState: "SUCCESS",
+		linkedPRNum:  2,
+	}
+	script := `#!/bin/sh
+cat > /dev/null
+echo "AUTOPILOT_ACTION: READY_FOR_HUMAN"
+echo "AUTOPILOT_REASON: 仕様精緻化完了"
+`
+	e, _, cleanup := setupTestEngine(t, fake, script)
+	defer cleanup()
+
+	var logBuf bytes.Buffer
+	e.log = slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	ctx := context.Background()
+	it := &store.Item{
+		Repo:          "owner/repo",
+		IssueNumber:   1,
+		ProjectItemID: "item_1",
+		LastStatus:    "📥 Inbox",
+	}
+	if err := e.st.Upsert(it); err != nil {
+		t.Fatalf("Upsert failed: %v", err)
+	}
+
+	job := Job{
+		Phase: PhaseRefine,
+		Repo:  "owner/repo",
+		Issue: 1,
+	}
+	e.runJob(ctx, job)
+
+	logStr := logBuf.String()
+	if !strings.Contains(logStr, "エージェントを起動します") {
+		t.Errorf("起動ログが出力されていません:\n%s", logStr)
+	}
+	if !strings.Contains(logStr, "phase=refine") {
+		t.Errorf("phase=refine がログに含まれていません:\n%s", logStr)
+	}
+	if !strings.Contains(logStr, "ジョブが完了しました") {
+		t.Errorf("完了ログが出力されていません:\n%s", logStr)
 	}
 }
 
