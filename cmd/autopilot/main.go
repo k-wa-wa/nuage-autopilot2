@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
+	"nuage-autopilot2/internal/agent"
 	"nuage-autopilot2/internal/config"
 	"nuage-autopilot2/internal/engine"
 )
@@ -157,13 +159,31 @@ func cmdDoctor(ctx context.Context, cfg *config.Config, log *slog.Logger) error 
 	fmt.Printf("✓ DB: %s\n", cfg.Database)
 	fmt.Printf("✓ ワークスペース: %s\n", cfg.Workspace)
 
-	for _, kind := range []string{config.AgentRefine, config.AgentImplement, config.AgentReview, config.AgentTriage} {
-		a := cfg.AgentFor(kind)
-		if _, err := exec.LookPath(a.Command); err != nil {
-			fmt.Printf("✗ エージェント %s: コマンド %q が PATH にありません\n", kind, a.Command)
+	for _, use := range config.AgentUses {
+		spec := cfg.AgentFor(use).Spec()
+		command := spec.ResolvedCommand()
+		adapter := spec.Adapter()
+
+		// 実際に投げる引数を組み立てて見せる。プロンプトは <prompt> に伏せる。
+		inv, err := adapter.Build(agent.Request{
+			Prompt: "<prompt>", Model: spec.Model, ExtraArgs: spec.ExtraArgs, Timeout: spec.Timeout,
+		})
+		if err != nil {
+			fmt.Printf("✗ エージェント %s: 起動引数を組み立てられません: %v\n", use, err)
 			continue
 		}
-		fmt.Printf("✓ エージェント %s: %s %v (timeout %s)\n", kind, a.Command, a.Args, a.Timeout)
+		mark := "✓"
+		if _, err := exec.LookPath(command); err != nil {
+			mark = "✗"
+		}
+		fmt.Printf("%s エージェント %s (adapter: %s, timeout %s)\n    %s %s\n",
+			mark, use, adapter.Name(), spec.Timeout, command, strings.Join(inv.DisplayArgs(), " "))
+		if mark == "✗" {
+			fmt.Printf("    コマンド %q が PATH にありません\n", command)
+		}
+		if adapter.Name() == agent.AdapterExec {
+			fmt.Printf("    ※ 専用アダプタが無いため、非対話モード等のフラグは args に自分で指定する必要があります\n")
+		}
 	}
 
 	repos := make([]string, 0, len(cfg.Repos))

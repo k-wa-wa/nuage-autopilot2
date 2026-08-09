@@ -554,7 +554,7 @@ func (e *Engine) execute(ctx context.Context, j Job, it *store.Item) (*agent.Res
 	default:
 		return nil, fmt.Errorf("未知のフェーズ: %s", j.Phase)
 	}
-	return e.runner.Run(ctx, e.cfg.AgentFor(kind), j.Phase, e.ws.Path(it.Repo), text)
+	return e.runner.Run(ctx, e.cfg.AgentFor(kind).Spec(), j.Phase, e.ws.Path(it.Repo), text)
 }
 
 // applyResult はエージェントのマーカー出力を状態遷移に変換する。

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"nuage-autopilot2/internal/agent"
 )
 
 // Config はワーカー全体の設定。
@@ -77,13 +79,31 @@ type Limits struct {
 	ContextComments int `yaml:"context_comments"`
 }
 
-// Agent は 1 回のエージェント起動に使うコマンド。プロンプトは stdin で渡す。
+// Agent は 1 つの用途で使うエージェント CLI の設定。
+//
+// 起動方法（プロンプトを標準入力で渡すか argv で渡すか等）は Command から
+// 解決したアダプタが決める。Args はアダプタが組み立てた引数の後ろに付く追加分。
 type Agent struct {
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args"`
-	Env     map[string]string `yaml:"env"`
+	// Command は実行するコマンド。パスでもよい。空なら claude。
+	Command string `yaml:"command"`
+	// Model は使用するモデル。空なら CLI の既定に任せる。
+	Model string `yaml:"model"`
+	// Args はアダプタが組み立てた引数に追加する分。
+	Args []string          `yaml:"args"`
+	Env  map[string]string `yaml:"env"`
 	// Timeout が 0 の場合は Limits の既定値を使う。
 	Timeout time.Duration `yaml:"timeout"`
+}
+
+// Spec はランタイム用の起動設定に変換する。
+func (a Agent) Spec() agent.Spec {
+	return agent.Spec{
+		Command:   a.Command,
+		Model:     a.Model,
+		ExtraArgs: a.Args,
+		Env:       a.Env,
+		Timeout:   a.Timeout,
+	}
 }
 
 // エージェントの用途キー。設定ファイルの agents: 配下のキーと対応する。
@@ -93,6 +113,9 @@ const (
 	AgentReview    = "review"
 	AgentTriage    = "triage"
 )
+
+// AgentUses は設定を持つ用途の一覧。
+var AgentUses = []string{AgentRefine, AgentImplement, AgentReview, AgentTriage}
 
 // Load は設定ファイルを読み、既定値の補完と検証を行う。
 func Load(path string) (*Config, error) {
@@ -164,11 +187,13 @@ func (c *Config) applyDefaults() error {
 		c.Agents = map[string]Agent{}
 	}
 	// 既定はすべて claude。設定で用途ごとに差し替えられる。
-	def := Agent{Command: "claude", Args: []string{"-p", "--dangerously-skip-permissions"}}
-	for _, k := range []string{AgentRefine, AgentImplement, AgentReview, AgentTriage} {
-		if _, ok := c.Agents[k]; !ok {
-			c.Agents[k] = def
+	// 非対話・権限スキップなどの必須フラグはアダプタが付けるので、ここでは指定しない。
+	for _, u := range AgentUses {
+		a := c.Agents[u]
+		if a.Command == "" {
+			a.Command = agent.DefaultCommand
 		}
+		c.Agents[u] = a
 	}
 	return nil
 }
@@ -186,6 +211,16 @@ func (c *Config) validate() error {
 	for _, r := range c.Repos {
 		if r.Owner == "" || r.Name == "" {
 			return fmt.Errorf("repos の要素に owner/name が不足")
+		}
+	}
+	// 用途キーの打ち間違いは黙って無視されるため、起動時に弾く。
+	known := map[string]bool{}
+	for _, u := range AgentUses {
+		known[u] = true
+	}
+	for name := range c.Agents {
+		if !known[name] {
+			return fmt.Errorf("agents.%s は未知の用途です（利用可能: %s）", name, strings.Join(AgentUses, ", "))
 		}
 	}
 	return nil

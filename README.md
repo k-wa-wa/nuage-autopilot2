@@ -82,21 +82,18 @@ go build -o autopilot ./cmd/autopilot
 
 ## エージェントの差し替え
 
-用途ごとに任意の CLI を指定できる。プロンプトは **stdin** で渡すため、引数仕様に依存しない。
+用途（`refine` / `implement` / `review` / `triage`）ごとに CLI を選べる。
+**`command` から起動方法を解決する**ので、指定するのはコマンド名だけでよい。
+非対話モードや権限スキップなどの必須フラグは自動で付く。
 
-```yaml
-agents:
-  implement:
-    command: claude
-    args: ["-p", "--dangerously-skip-permissions"]
-  review:
-    command: some-other-agent
-    args: ["--print"]
-    timeout: 15m
-```
+| command | プロンプトの渡し方 |
+|---|---|
+| `claude` | 標準入力 |
+| `agy` | `--print` の引数（`--print-timeout` も自動で合わせる） |
+| それ以外 | 標準入力（`command` と `args` をそのまま起動） |
 
 エージェントは判断結果を出力の行頭マーカーで返す（`AUTOPILOT_ACTION` / `AUTOPILOT_VERDICT` / `AUTOPILOT_REASON`）。
-詳細は [ARCHITECTURE.md §4.6](./ARCHITECTURE.md)。
+詳細は [ARCHITECTURE.md §4.5〜4.6](./ARCHITECTURE.md)。
 
 ## 設計上の約束
 

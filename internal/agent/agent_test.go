@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"nuage-autopilot2/internal/config"
 )
 
 func TestParseMarkers(t *testing.T) {
@@ -43,11 +41,7 @@ func TestParseMarkersIgnoresInlineMentions(t *testing.T) {
 
 func TestRunCapturesOutputAndMarkers(t *testing.T) {
 	r := New(t.TempDir(), nil)
-	a := config.Agent{
-		Command: "sh",
-		Args:    []string{"-c", `cat > /dev/null; echo "done"; echo "AUTOPILOT_VERDICT: PASS"`},
-		Timeout: 10 * time.Second,
-	}
+	a := Spec{Command: "sh", ExtraArgs: []string{"-c", `cat > /dev/null; echo "done"; echo "AUTOPILOT_VERDICT: PASS"`}, Timeout: 10 * time.Second}
 	res, err := r.Run(context.Background(), a, "review", t.TempDir(), "テストプロンプト")
 	if err != nil {
 		t.Fatalf("Run に失敗: %v", err)
@@ -65,7 +59,7 @@ func TestRunCapturesOutputAndMarkers(t *testing.T) {
 
 func TestRunPassesPromptOnStdin(t *testing.T) {
 	r := New("", nil)
-	a := config.Agent{Command: "cat", Timeout: 10 * time.Second}
+	a := Spec{Command: "cat", Timeout: 10 * time.Second}
 	res, err := r.Run(context.Background(), a, "refine", t.TempDir(), "こんにちは")
 	if err != nil {
 		t.Fatalf("Run に失敗: %v", err)
@@ -77,7 +71,7 @@ func TestRunPassesPromptOnStdin(t *testing.T) {
 
 func TestRunReportsExitFailure(t *testing.T) {
 	r := New("", nil)
-	a := config.Agent{Command: "sh", Args: []string{"-c", "exit 3"}, Timeout: 10 * time.Second}
+	a := Spec{Command: "sh", ExtraArgs: []string{"-c", "exit 3"}, Timeout: 10 * time.Second}
 	res, err := r.Run(context.Background(), a, "implement", t.TempDir(), "")
 	if err == nil {
 		t.Fatal("異常終了がエラーになりません")
@@ -89,7 +83,7 @@ func TestRunReportsExitFailure(t *testing.T) {
 
 func TestRunTimesOut(t *testing.T) {
 	r := New("", nil)
-	a := config.Agent{Command: "sleep", Args: []string{"5"}, Timeout: 200 * time.Millisecond}
+	a := Spec{Command: "sleep", ExtraArgs: []string{"5"}, Timeout: 200 * time.Millisecond}
 	res, err := r.Run(context.Background(), a, "implement", t.TempDir(), "")
 	if err == nil {
 		t.Fatal("タイムアウトがエラーになりません")

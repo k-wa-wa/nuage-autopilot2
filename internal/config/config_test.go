@@ -3,6 +3,7 @@ package config
 import (
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -64,5 +65,64 @@ func TestValidateRejectsMissingProject(t *testing.T) {
 	}
 	if err := c.validate(); err == nil {
 		t.Error("project 未指定でもエラーになりませんでした")
+	}
+}
+
+func TestAgentCommandDefaultsToClaude(t *testing.T) {
+	c, err := Load(examplePath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// example では review だけ agy にしている。
+	if got := c.AgentFor(AgentReview).Command; got != "agy" {
+		t.Errorf("review の command = %q, want agy", got)
+	}
+	if got := c.AgentFor(AgentImplement).Command; got != "claude" {
+		t.Errorf("implement の command = %q, want claude", got)
+	}
+	// agents: に書かれていない用途も claude で埋まる。
+	c2 := &Config{
+		Project: Project{Owner: "o", Number: 1},
+		Repos:   []Repo{{Owner: "o", Name: "r"}},
+	}
+	if err := c2.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range AgentUses {
+		if got := c2.Agents[u].Command; got != "claude" {
+			t.Errorf("%s の command = %q, want claude", u, got)
+		}
+	}
+}
+
+// 用途キーの打ち間違いは黙って無視されるので、起動時に弾く。
+func TestValidateRejectsUnknownAgentUse(t *testing.T) {
+	c := &Config{
+		Project: Project{Owner: "o", Number: 1},
+		Repos:   []Repo{{Owner: "o", Name: "r"}},
+		Agents:  map[string]Agent{"implment": {Command: "claude"}},
+	}
+	if err := c.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	err := c.validate()
+	if err == nil {
+		t.Fatal("未知の用途キーがエラーになりません")
+	}
+	if !strings.Contains(err.Error(), "implment") {
+		t.Errorf("どのキーか示されていません: %v", err)
+	}
+}
+
+func TestSpecCarriesAgentSettings(t *testing.T) {
+	a := Agent{Command: "/opt/agy", Model: "m", Args: []string{"--x"}, Timeout: time.Minute}
+	s := a.Spec()
+	if s.ResolvedCommand() != "/opt/agy" || s.Model != "m" ||
+		len(s.ExtraArgs) != 1 || s.Timeout != time.Minute {
+		t.Errorf("Spec への変換が不正: %+v", s)
+	}
+	// command からアダプタが解決されること。
+	if got := s.Adapter().Name(); got != "agy" {
+		t.Errorf("解決されたアダプタ = %s, want agy", got)
 	}
 }

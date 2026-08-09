@@ -1,7 +1,10 @@
-// Package agent はコーディングエージェント CLI（claude 等）を起動する。
+// Package agent はコーディングエージェント CLI（claude / agy 等）を起動する。
 //
-// どのエージェントを使うかは設定ファイルで差し替えられる。プロンプトは stdin
-// で渡し、判断結果は出力中のマーカー行（KEY: VALUE）で受け取る。
+// CLI ごとの起動方法の違い（プロンプトを stdin で渡すか argv で渡すか、
+// CLI 側の内部タイムアウトを揃える必要があるか）は Adapter が吸収する。
+// 判断結果は出力中のマーカー行（KEY: VALUE）で受け取る。
+//
+// このパッケージは他の内部パッケージに依存しない。
 package agent
 
 import (
@@ -16,8 +19,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"nuage-autopilot2/internal/config"
 )
 
 // Runner はエージェントプロセスを起動する。
@@ -74,28 +75,38 @@ var markerRe = regexp.MustCompile(`(?m)^\s*(AUTOPILOT_[A-Z_]+)\s*:\s*(.+?)\s*$`)
 
 // Run はエージェントを起動し、完了を待つ。
 //
-// workDir でプロセスを動かし、prompt を stdin へ書き込む。タイムアウトすると
-// プロセスを終了させ、TimedOut を立てた Result を返す（error も返す）。
-func (r *Runner) Run(ctx context.Context, a config.Agent, phase, workDir, prompt string) (*Result, error) {
-	if a.Command == "" {
-		return nil, fmt.Errorf("エージェントのコマンドが未設定です (phase: %s)", phase)
-	}
-	timeout := a.Timeout
+// workDir でプロセスを動かし、プロンプトの渡し方はアダプタに委ねる。
+// タイムアウトするとプロセスを終了させ、TimedOut を立てた Result を返す（error も返す）。
+func (r *Runner) Run(ctx context.Context, s Spec, phase, workDir, prompt string) (*Result, error) {
+	command := s.ResolvedCommand()
+	adapter := s.Adapter()
+	timeout := s.Timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
+
+	inv, err := adapter.Build(Request{
+		Prompt:    prompt,
+		Model:     s.Model,
+		ExtraArgs: s.ExtraArgs,
+		Timeout:   timeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("エージェントの起動引数を組み立てられません (phase: %s): %w", phase, err)
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, a.Command, a.Args...)
+	cmd := exec.CommandContext(runCtx, command, inv.Args...)
 	cmd.Dir = workDir
-	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Stdin = strings.NewReader(inv.Stdin)
 
 	env := r.BaseEnv
 	if env == nil {
 		env = os.Environ()
 	}
-	for k, v := range a.Env {
+	for k, v := range s.Env {
 		env = append(env, k+"="+v)
 	}
 	cmd.Env = env
@@ -103,8 +114,10 @@ func (r *Runner) Run(ctx context.Context, a config.Agent, phase, workDir, prompt
 	logPath, logFile := r.openLog(phase, workDir)
 	if logFile != nil {
 		defer logFile.Close()
-		fmt.Fprintf(logFile, "=== phase=%s cmd=%s %s dir=%s at=%s ===\n--- prompt ---\n%s\n--- output ---\n",
-			phase, a.Command, strings.Join(a.Args, " "), workDir, time.Now().Format(time.RFC3339), prompt)
+		// プロンプトは別途まとめて出すため、引数側では伏せる。
+		fmt.Fprintf(logFile, "=== phase=%s adapter=%s cmd=%s %s dir=%s at=%s ===\n--- prompt ---\n%s\n--- output ---\n",
+			phase, adapter.Name(), command, strings.Join(inv.DisplayArgs(), " "),
+			workDir, time.Now().Format(time.RFC3339), prompt)
 	}
 
 	var stdout, stderr bytes.Buffer

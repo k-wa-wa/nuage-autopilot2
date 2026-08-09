@@ -43,20 +43,28 @@ limits:
   verify_wait_timeout: 1h # CI 完了待ちの上限。超えると Blocked
   context_comments: 10 # プロンプトに含める直近コメント数
 
-# 用途ごとにエージェント CLI を差し替えられる。プロンプトは stdin で渡す。
+# 用途ごとにエージェント CLI を差し替えられる。
+#
+# command から起動方法（プロンプトを標準入力で渡すか引数で渡すか、CLI 側の内部
+# タイムアウトを揃えるか）を解決する。非対話・権限スキップなどの必須フラグは
+# 自動で付くので、args には追加分だけを書く。
+#
+#   claude : プロンプトを標準入力で渡す
+#   agy    : プロンプトを --print の引数で渡し、--print-timeout をワーカーの上限に合わせる
+#   その他 : command と args をそのまま起動し、プロンプトは標準入力
+#
+# パス指定（/home/nixos/.local/bin/agy など）でもコマンド名で判定する。
+# 省略した用途は claude になる。
 agents:
   refine:
     command: claude
-    args: ["-p", "--dangerously-skip-permissions"]
   implement:
     command: claude
-    args: ["-p", "--dangerously-skip-permissions"]
   review:
-    command: claude
-    args: ["-p", "--dangerously-skip-permissions"]
+    command: agy
+    # model: gemini-3.6-flash-high
   triage:
     command: claude
-    args: ["-p", "--dangerously-skip-permissions"]
 # 全エージェントに渡す追加の環境変数。
 # env:
 #   SOME_KEY: value
