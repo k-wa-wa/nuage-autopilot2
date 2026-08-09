@@ -220,3 +220,64 @@ func TestConfigureProjectStatusesCreatesMissingField(t *testing.T) {
 		t.Errorf("作成側の入力型名が正しくありません:\n%s", q)
 	}
 }
+
+// フィールドが 50 個を超えて 2 ページ目に Status がある Project でも見つける。
+// 取りこぼすとフィールド作成に回り、"name already in use" で失敗する。
+func TestFindSingleSelectFieldPaginates(t *testing.T) {
+	var pages int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+		vars, _ := req["variables"].(map[string]any)
+		w.Header().Set("Content-Type", "application/json")
+
+		if _, hasCursor := vars["cursor"]; !hasCursor {
+			pages++
+			// 1 ページ目には目的のフィールドが無い。
+			io.WriteString(w, `{"data":{"node":{"fields":{
+				"pageInfo":{"hasNextPage":true,"endCursor":"CUR"},
+				"nodes":[{"id":"f_other","name":"Priority","options":[]}]}}}}`)
+			return
+		}
+		pages++
+		if vars["cursor"] != "CUR" {
+			t.Errorf("カーソルが渡っていません: %v", vars["cursor"])
+		}
+		io.WriteString(w, `{"data":{"node":{"fields":{
+			"pageInfo":{"hasNextPage":false,"endCursor":""},
+			"nodes":[{"id":"f_status","name":"Status","options":[
+				{"id":"opt_a","name":"📥 Inbox","color":"GRAY","description":"d"}]}]}}}}`)
+	}))
+	defer srv.Close()
+
+	c := NewForTest("t", srv.URL, srv.URL+"/graphql")
+	id, opts, err := c.findSingleSelectField(context.Background(), "proj_1", "Status")
+	if err != nil {
+		t.Fatalf("findSingleSelectField: %v", err)
+	}
+	if id != "f_status" {
+		t.Errorf("フィールド ID = %q, want f_status", id)
+	}
+	if len(opts) != 1 || opts[0].ID != "opt_a" {
+		t.Errorf("選択肢が取れていません: %+v", opts)
+	}
+	if pages != 2 {
+		t.Errorf("ページ数 = %d, want 2", pages)
+	}
+}
+
+// 最後まで見て無ければ空を返す（呼び出し側がフィールドを作る）。
+func TestFindSingleSelectFieldNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":{"node":{"fields":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}`)
+	}))
+	defer srv.Close()
+
+	c := NewForTest("t", srv.URL, srv.URL+"/graphql")
+	id, _, err := c.findSingleSelectField(context.Background(), "proj_1", "Status")
+	if err != nil || id != "" {
+		t.Errorf("id=%q err=%v, want 空", id, err)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -20,6 +21,7 @@ import (
 	"nuage-autopilot2/internal/config"
 	"nuage-autopilot2/internal/engine"
 	"nuage-autopilot2/internal/gh"
+	"nuage-autopilot2/internal/store"
 	"nuage-autopilot2/internal/workspace"
 )
 
@@ -104,18 +106,23 @@ func run() error {
 }
 
 func cmdSetupProject(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("setup-project", flag.ExitOnError)
+	flags := flag.NewFlagSet("setup-project", flag.ExitOnError)
 	var title, owner, ownerType, fieldName, cfgPath string
-	var forceNew bool
-	fs.StringVar(&cfgPath, "config", "config.yaml", "設定ファイルのパス")
-	fs.StringVar(&cfgPath, "c", "config.yaml", "設定ファイルのパス（短縮形）")
-	fs.StringVar(&title, "title", "Autopilot Board", "作成するプロジェクトのタイトル（新規作成時）")
-	fs.StringVar(&owner, "owner", "", "GitHub オーナー名（未指定なら設定ファイルまたは認証ユーザー）")
-	fs.StringVar(&ownerType, "owner-type", "", "オーナーの種別: user または organization")
-	fs.StringVar(&fieldName, "field", "", "Status を管理するフィールド名")
-	fs.BoolVar(&forceNew, "new", false, "設定ファイルの Project 番号を無視して新規作成する")
-	if err := fs.Parse(args); err != nil {
+	var forceNew, verbose bool
+	flags.StringVar(&cfgPath, "config", "config.yaml", "設定ファイルのパス")
+	flags.StringVar(&cfgPath, "c", "config.yaml", "設定ファイルのパス（短縮形）")
+	flags.StringVar(&title, "title", "Autopilot Board", "作成するプロジェクトのタイトル（新規作成時）")
+	flags.StringVar(&owner, "owner", "", "GitHub オーナー名（未指定なら設定ファイルまたは認証ユーザー）")
+	flags.StringVar(&ownerType, "owner-type", "", "オーナーの種別: user または organization")
+	flags.StringVar(&fieldName, "field", "", "Status を管理するフィールド名")
+	flags.BoolVar(&forceNew, "new", false, "設定ファイルの Project 番号を無視して新規作成する")
+	flags.BoolVar(&verbose, "verbose", false, "解決したパラメータを表示する")
+	flags.BoolVar(&verbose, "v", false, "解決したパラメータを表示する（短縮形）")
+	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if ownerType != "" && ownerType != "user" && ownerType != "organization" {
+		return fmt.Errorf("--owner-type は user か organization を指定してください（指定値: %q）", ownerType)
 	}
 
 	client, err := gh.New()
@@ -123,8 +130,23 @@ func cmdSetupProject(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// 既存の config.yaml を読めるか試行
+	// 設定ファイルは「無い」なら新規作成に進むが、「壊れている」なら止める。
+	// 区別しないと、agents のキーを打ち間違えただけで既存 Project の修復のつもりが
+	// 新しい Project の作成にすり替わってしまう。
 	cfg, cfgErr := config.Load(cfgPath)
+	if cfgErr != nil && !errors.Is(cfgErr, fs.ErrNotExist) && !forceNew {
+		return fmt.Errorf("設定ファイル %s を読めません: %w\n"+
+			"  設定を直すか、新しい Project を作るなら --new を付けてください", cfgPath, cfgErr)
+	}
+	if verbose {
+		if cfgErr != nil {
+			fmt.Printf("[verbose] 設定ファイル %s は見つかりませんでした\n", cfgPath)
+		} else {
+			fmt.Printf("[verbose] 設定ファイル %s を読み込みました (project: %s/%d)\n",
+				cfgPath, cfg.Project.Owner, cfg.Project.Number)
+		}
+	}
+
 	if cfgErr == nil && !forceNew && cfg.Project.Number > 0 {
 		// --- 既存 Project の修復モード ---
 		if owner == "" {
@@ -285,8 +307,17 @@ func cmdDoctor(ctx context.Context, cfg *config.Config, log *slog.Logger) error 
 		}
 	}
 
-	fmt.Printf("✓ DB: %s\n", cfg.Database)
-	fmt.Printf("✓ ワークスペース: %s\n", cfg.Workspace)
+	// 実際に開いてスキーマ適用まで通す。書き込めないパスや壊れた DB を
+	// 「✓」で通してしまうと、doctor の存在意義が無くなる。
+	if st, err := store.Open(cfg.Database); err != nil {
+		fmt.Printf("✗ DB: %s: %v\n", cfg.Database, err)
+		hasError = true
+	} else {
+		st.Close()
+		fmt.Printf("✓ DB: %s\n", cfg.Database)
+	}
+	// ワークスペースは下のリポジトリ同期で検証する。
+	fmt.Printf("… ワークスペース: %s\n", cfg.Workspace)
 
 	for _, use := range config.AgentUses {
 		spec := cfg.AgentFor(use).Spec()

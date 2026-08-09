@@ -291,10 +291,11 @@ mutation($ownerId: ID!, $title: String!) {
 }`
 
 const projectFieldsQuery = `
-query($id: ID!) {
+query($id: ID!, $cursor: String) {
   node(id: $id) {
     ... on ProjectV2 {
-      fields(first: 50) {
+      fields(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           ... on ProjectV2SingleSelectField {
             id
@@ -388,6 +389,51 @@ func mergeOptions(existing []SingleSelectOption, want []SingleSelectOptionInput)
 	return out
 }
 
+// findSingleSelectField は指定名の単一選択フィールドとその選択肢を探す。
+//
+// 見つからない場合は空文字を返す（呼び出し側でフィールドを新規作成する）。
+// フィールド数が 50 を超える Project でも取りこぼさないようページングする。
+func (c *Client) findSingleSelectField(ctx context.Context, projectID, fieldName string) (string, []SingleSelectOption, error) {
+	var cursor *string
+	for {
+		var resp struct {
+			Node *struct {
+				Fields struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []struct {
+						ID      string               `json:"id"`
+						Name    string               `json:"name"`
+						Options []SingleSelectOption `json:"options"`
+					} `json:"nodes"`
+				} `json:"fields"`
+			} `json:"node"`
+		}
+		vars := map[string]any{"id": projectID}
+		if cursor != nil {
+			vars["cursor"] = *cursor
+		}
+		if err := c.graphql(ctx, projectFieldsQuery, vars, &resp); err != nil {
+			return "", nil, fmt.Errorf("フィールド一覧の取得に失敗: %w", err)
+		}
+		if resp.Node == nil {
+			return "", nil, nil
+		}
+		for _, f := range resp.Node.Fields.Nodes {
+			if f.Name == fieldName {
+				return f.ID, f.Options, nil
+			}
+		}
+		if !resp.Node.Fields.PageInfo.HasNextPage {
+			return "", nil, nil
+		}
+		end := resp.Node.Fields.PageInfo.EndCursor
+		cursor = &end
+	}
+}
+
 // ConfigureProjectStatuses は既存の GitHub Projects v2 に対して Status 選択肢を設定・修復する。
 //
 // 既存の選択肢は名前が一致すれば id ごと引き継ぎ、定義外の選択肢も残す。
@@ -405,32 +451,10 @@ func (c *Client) configureStatuses(ctx context.Context, projectID, fieldName str
 		options = DefaultStatuses
 	}
 
-	// 1. プロジェクトのフィールド一覧と、既存の選択肢を取得
-	var fieldsResp struct {
-		Node *struct {
-			Fields struct {
-				Nodes []struct {
-					ID      string               `json:"id"`
-					Name    string               `json:"name"`
-					Options []SingleSelectOption `json:"options"`
-				} `json:"nodes"`
-			} `json:"fields"`
-		} `json:"node"`
-	}
-	if err := c.graphql(ctx, projectFieldsQuery, map[string]any{"id": projectID}, &fieldsResp); err != nil {
-		return fmt.Errorf("フィールド一覧の取得に失敗: %w", err)
-	}
-
-	var targetFieldID string
-	var existing []SingleSelectOption
-	if fieldsResp.Node != nil {
-		for _, f := range fieldsResp.Node.Fields.Nodes {
-			if f.Name == fieldName {
-				targetFieldID = f.ID
-				existing = f.Options
-				break
-			}
-		}
+	// 1. 対象フィールドと、その既存の選択肢を探す
+	targetFieldID, existing, err := c.findSingleSelectField(ctx, projectID, fieldName)
+	if err != nil {
+		return err
 	}
 
 	// 2. Status フィールドの選択肢を更新、または新規作成
