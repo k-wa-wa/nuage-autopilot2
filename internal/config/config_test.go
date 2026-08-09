@@ -13,7 +13,7 @@ func examplePath(t *testing.T) string {
 	if !ok {
 		t.Fatal("caller を取得できません")
 	}
-	return filepath.Join(filepath.Dir(thisFile), "..", "..", "nuage.example.yaml")
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "config.example.yaml")
 }
 
 func TestLoadExample(t *testing.T) {

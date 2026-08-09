@@ -17,6 +17,56 @@ import (
 // ciFailureHint は CI 失敗時に実装エージェントへ渡す調査の手がかり。
 const ciFailureHint = "CI が失敗しました。`gh pr checks` および `gh run view --log-failed` で失敗内容を確認し、原因を修正してください。"
 
+// PR 発見のリトライ設定。
+//
+// 実装エージェントが gh pr create を終えた直後は、Issue の timeline に
+// CROSS_REFERENCED_EVENT が反映されるまで数秒のラグがある。一度きりの問い合わせだと
+// nil が返り、PR は正しく作られているのに誤って Blocked へ落ちてしまう。
+const (
+	linkedPRAttempts = 3
+	linkedPRBackoff  = 2 * time.Second
+)
+
+// retryFindPR は PR が見つかるまで backoff を挟んで最大 attempts 回試行する。
+//
+// エラーは記録しつつ次の試行に進む（一時的な API エラーもラグと同様に吸収するため）。
+// 全試行で見つからなければ (nil, 最後のエラー) を返す。エラーが一度も起きていなければ
+// (nil, nil) となり、呼び出し側は「本当に PR が無い」と判断できる。
+func retryFindPR(ctx context.Context, attempts int, backoff time.Duration,
+	find func(context.Context) (*gh.PullRequest, error),
+) (*gh.PullRequest, error) {
+	var lastErr error
+	for i := range attempts {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+		pr, err := find(ctx)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if pr != nil {
+			return pr, nil
+		}
+	}
+	return nil, lastErr
+}
+
+// findLinkedPR は timeline の反映ラグを吸収しつつ Issue に紐づく PR を探す。
+func (e *Engine) findLinkedPR(ctx context.Context, repo string, issue int) (*gh.PullRequest, error) {
+	pr, err := retryFindPR(ctx, linkedPRAttempts, linkedPRBackoff, func(ctx context.Context) (*gh.PullRequest, error) {
+		return e.client.FindLinkedPR(ctx, repo, issue)
+	})
+	if err == nil && pr == nil {
+		e.log.Warn("紐づく PR が見つかりませんでした", "repo", repo, "issue", issue, "attempts", linkedPRAttempts)
+	}
+	return pr, err
+}
+
 // dispatch はイベントを受け取り、状態遷移とジョブ投入を行う。
 //
 // ここでの処理はすべて短時間で終わるものに限る（エージェント起動はジョブに回す）。
@@ -263,7 +313,7 @@ func (e *Engine) handleVerifyTick(ctx context.Context, ev Event) error {
 	}
 
 	if it.PRNumber == 0 {
-		pr, err := e.client.FindLinkedPR(ctx, it.Repo, it.IssueNumber)
+		pr, err := e.findLinkedPR(ctx, it.Repo, it.IssueNumber)
 		if err != nil {
 			return err
 		}
@@ -521,7 +571,7 @@ func (e *Engine) applyResult(ctx context.Context, j Job, it *store.Item, res *ag
 		if action == "BLOCKED" {
 			return e.block(ctx, it, fmt.Sprintf("実装を続行できませんでした。\n\n%s", fallback(reason, "理由の報告がありません。")))
 		}
-		pr, err := e.client.FindLinkedPR(ctx, it.Repo, it.IssueNumber)
+		pr, err := e.findLinkedPR(ctx, it.Repo, it.IssueNumber)
 		if err != nil {
 			return err
 		}

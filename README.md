@@ -1,4 +1,4 @@
-# nuage-autopilot
+# autopilot
 
 GitHub Projects をステートマシンの単一の真実源として使う、自動開発パイプラインの常駐ワーカー。
 
@@ -39,18 +39,18 @@ export GH_TOKEN=ghp_xxxxxxxxxxxx
 ### 2. 設定
 
 ```sh
-cp nuage.example.yaml nuage.yaml
-$EDITOR nuage.yaml   # project.owner / project.number / repos を書き換える
+cp config.example.yaml config.yaml
+$EDITOR config.yaml   # project.owner / project.number / repos を書き換える
 ```
 
 ### 3. 検証と起動
 
 ```sh
-go build -o nuage ./cmd/nuage
+go build -o autopilot ./cmd/autopilot
 
-./nuage doctor     # トークン・Project・Status 名・エージェント・clone を検証
-./nuage init       # コールドスタートのシード（現在を処理済みとして記録）
-./nuage run        # 常駐開始
+./autopilot doctor     # トークン・Project・Status 名・エージェント・clone を検証
+./autopilot init       # コールドスタートのシード（現在を処理済みとして記録）
+./autopilot run        # 常駐開始
 ```
 
 `init` を省いても `run` が DB の空を検出して自動でシードする。
@@ -73,12 +73,12 @@ go build -o nuage ./cmd/nuage
 
 | コマンド | 役割 |
 |---|---|
-| `nuage run` | 常駐してパイプラインを回す |
-| `nuage init` | コールドスタートのシード |
-| `nuage status` | ローカル状態（Status / PR / ブランチ / リトライ回数）の一覧 |
-| `nuage doctor` | 設定と前提条件の検証 |
+| `autopilot run` | 常駐してパイプラインを回す |
+| `autopilot init` | コールドスタートのシード |
+| `autopilot status` | ローカル状態（Status / PR / ブランチ / リトライ回数）の一覧 |
+| `autopilot doctor` | 設定と前提条件の検証 |
 
-共通フラグ: `-c, --config <path>`（既定 `nuage.yaml`）、`-v, --verbose`
+共通フラグ: `-c, --config <path>`（既定 `config.yaml`）、`-v, --verbose`
 
 ## エージェントの差し替え
 

@@ -27,10 +27,10 @@ type Manager struct {
 // New は Manager を作る。tokenEnv は認証に使う環境変数名（例: GH_TOKEN）。
 func New(root, tokenEnv, gitName, gitEmail string) *Manager {
 	if gitName == "" {
-		gitName = "nuage-autopilot"
+		gitName = "autopilot"
 	}
 	if gitEmail == "" {
-		gitEmail = "nuage-autopilot@users.noreply.github.com"
+		gitEmail = "autopilot@users.noreply.github.com"
 	}
 	return &Manager{root: root, tokenEnv: tokenEnv, gitName: gitName, gitEmail: gitEmail}
 }

@@ -1,11 +1,11 @@
-# nuage 設定ファイルの例。nuage.yaml にコピーして編集する。
+# autopilot 設定ファイルの例。config.yaml にコピーして編集する。
 #
 # 認証は環境変数 GH_TOKEN（または GITHUB_TOKEN）から読む。
 # Projects v2 を操作するため、classic PAT の project スコープが必要。
 
 # 対象リポジトリの clone を置く場所と、状態キャッシュ DB の場所。
-workspace: ~/.nuage/workspaces
-database: ~/.nuage/nuage.db
+workspace: ~/.autopilot/workspaces
+database: ~/.autopilot/autopilot.db
 
 # 対象リポジトリ内の品質ゲート定義ファイル（存在すれば検証フェーズのプロンプトに含める）。
 gate_file: .agents/autopilot-gate.md

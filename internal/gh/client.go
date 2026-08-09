@@ -16,7 +16,7 @@ import (
 const (
 	restBase    = "https://api.github.com"
 	graphqlURL  = "https://api.github.com/graphql"
-	userAgent   = "nuage-autopilot"
+	userAgent   = "autopilot"
 	apiVersion  = "2022-11-28"
 	defaultWait = 30 * time.Second
 )

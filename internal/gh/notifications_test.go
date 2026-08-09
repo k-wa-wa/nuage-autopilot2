@@ -75,8 +75,8 @@ func TestCIStatusMapping(t *testing.T) {
 }
 
 func TestSplitRepo(t *testing.T) {
-	o, n, err := splitRepo("k-wa-wa/nuage")
-	if err != nil || o != "k-wa-wa" || n != "nuage" {
+	o, n, err := splitRepo("k-wa-wa/autopilot")
+	if err != nil || o != "k-wa-wa" || n != "autopilot" {
 		t.Errorf("splitRepo = (%q, %q, %v)", o, n, err)
 	}
 	if _, _, err := splitRepo("invalid"); err == nil {

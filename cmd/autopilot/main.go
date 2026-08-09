@@ -1,4 +1,4 @@
-// Command nuage は GitHub Projects をステートマシンとする自動開発パイプラインの
+// Command autopilot は GitHub Projects をステートマシンとする自動開発パイプラインの
 // 常駐ワーカー。
 package main
 
@@ -19,10 +19,10 @@ import (
 	"github.com/k-wa-wa/nuage-autopilot2/internal/engine"
 )
 
-const usage = `nuage - 自動開発パイプラインの常駐ワーカー
+const usage = `autopilot - 自動開発パイプラインの常駐ワーカー
 
 使い方:
-  nuage <command> [flags]
+  autopilot <command> [flags]
 
 コマンド:
   run       常駐してパイプラインを回す
@@ -31,7 +31,7 @@ const usage = `nuage - 自動開発パイプラインの常駐ワーカー
   doctor    設定と前提条件を検証して終了する
 
 共通フラグ:
-  -c, --config <path>   設定ファイル（既定: nuage.yaml）
+  -c, --config <path>   設定ファイル（既定: config.yaml）
   -v, --verbose         デバッグログを出力する
 `
 
@@ -56,8 +56,8 @@ func run() error {
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	var cfgPath string
 	var verbose bool
-	fs.StringVar(&cfgPath, "config", "nuage.yaml", "設定ファイルのパス")
-	fs.StringVar(&cfgPath, "c", "nuage.yaml", "設定ファイルのパス（短縮形）")
+	fs.StringVar(&cfgPath, "config", "config.yaml", "設定ファイルのパス")
+	fs.StringVar(&cfgPath, "c", "config.yaml", "設定ファイルのパス（短縮形）")
 	fs.BoolVar(&verbose, "verbose", false, "デバッグログを出力する")
 	fs.BoolVar(&verbose, "v", false, "デバッグログを出力する（短縮形）")
 	if err := fs.Parse(os.Args[2:]); err != nil {

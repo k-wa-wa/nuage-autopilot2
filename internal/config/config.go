@@ -130,8 +130,8 @@ func (c *Config) applyDefaults() error {
 		}
 		return abs
 	}
-	c.Workspace = expand(c.Workspace, "~/.nuage/workspaces")
-	c.Database = expand(c.Database, "~/.nuage/nuage.db")
+	c.Workspace = expand(c.Workspace, "~/.autopilot/workspaces")
+	c.Database = expand(c.Database, "~/.autopilot/autopilot.db")
 
 	setDefault(&c.GateFile, ".agents/autopilot-gate.md")
 	setDefault(&c.Project.OwnerType, "user")
