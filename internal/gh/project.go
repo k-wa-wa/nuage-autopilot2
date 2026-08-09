@@ -223,3 +223,279 @@ func (c *Client) SetStatus(ctx context.Context, p *Project, itemID, status strin
 		"project": p.ID, "item": itemID, "field": p.StatusFieldID, "option": optID,
 	}, nil)
 }
+
+// ProjectInfo は作成された Project の基本情報。
+type ProjectInfo struct {
+	ID     string
+	Number int
+	URL    string
+	Title  string
+}
+
+// SingleSelectOptionInput は Single Select フィールドの選択肢入力。
+//
+// ID は「既存の選択肢を更新する」ことを表す。省略すると新規の選択肢として作られ、
+// 元の選択肢は削除されるため、その値が入っていたカードの Status が消える。
+// Name / Color / Description はスキーマ上すべて必須なので omitempty は付けない。
+type SingleSelectOptionInput struct {
+	ID          string `json:"id,omitempty"`
+	Name        string `json:"name"`
+	Color       string `json:"color"`
+	Description string `json:"description"`
+}
+
+// SingleSelectOption は Project から読み出した既存の選択肢。
+type SingleSelectOption struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Color       string `json:"color"`
+	Description string `json:"description"`
+}
+
+// DefaultStatuses は autopilot が標準で要求する 7 つのステータス定義（カラー付き）。
+var DefaultStatuses = []SingleSelectOptionInput{
+	{Name: "📥 Inbox", Color: "GRAY", Description: "新規要求の受付・仕様対話中"},
+	{Name: "🎯 Ready", Color: "BLUE", Description: "人間が実装着手を承認（唯一の手動操作）"},
+	{Name: "🚧 In Progress", Color: "YELLOW", Description: "エージェントが実装・テスト・PR作成中"},
+	{Name: "🔍 Verifying", Color: "PURPLE", Description: "CI実行待ち・セルフレビュー中"},
+	{Name: "👀 In Review", Color: "ORANGE", Description: "人間のレビュー待ち"},
+	{Name: "⏸ Blocked", Color: "RED", Description: "要人間介入（助言コメントで再開）"},
+	{Name: "✅ Done", Color: "GREEN", Description: "完了・クローズ"},
+}
+
+// ResolveOwnerID は user または organization の GraphQL Node ID を取得する。
+func (c *Client) ResolveOwnerID(ctx context.Context, ownerType, login string) (string, error) {
+	root := "user"
+	if ownerType == "organization" {
+		root = "organization"
+	}
+	query := fmt.Sprintf(`query($login: String!) { %s(login: $login) { id } }`, root)
+	var resp map[string]*struct {
+		ID string `json:"id"`
+	}
+	if err := c.graphql(ctx, query, map[string]any{"login": login}, &resp); err != nil {
+		return "", err
+	}
+	owner := resp[root]
+	if owner == nil || owner.ID == "" {
+		return "", fmt.Errorf("オーナー %q (%s) の Node ID を取得できませんでした", login, ownerType)
+	}
+	return owner.ID, nil
+}
+
+const createProjectMutation = `
+mutation($ownerId: ID!, $title: String!) {
+  createProjectV2(input: { ownerId: $ownerId, title: $title }) {
+    projectV2 { id number url title }
+  }
+}`
+
+const projectFieldsQuery = `
+query($id: ID!) {
+  node(id: $id) {
+    ... on ProjectV2 {
+      fields(first: 50) {
+        nodes {
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            options { id name color description }
+          }
+        }
+      }
+    }
+  }
+}`
+
+const updateFieldMutation = `
+mutation($fieldId: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: {
+    fieldId: $fieldId,
+    name: $name,
+    singleSelectOptions: $options
+  }) {
+    projectV2Field {
+      ... on ProjectV2SingleSelectField { id name }
+    }
+  }
+}`
+
+const createFieldMutation = `
+mutation($projectId: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  createProjectV2Field(input: {
+    projectId: $projectId,
+    dataType: SINGLE_SELECT,
+    name: $name,
+    singleSelectOptions: $options
+  }) {
+    projectV2Field {
+      ... on ProjectV2SingleSelectField { id name }
+    }
+  }
+}`
+
+// GetProjectID は指定された Project 番号の Node ID を取得する。
+func (c *Client) GetProjectID(ctx context.Context, ownerType, login string, number int) (string, error) {
+	root := "user"
+	if ownerType == "organization" {
+		root = "organization"
+	}
+	query := fmt.Sprintf(`query($login: String!, $number: Int!) { %s(login: $login) { projectV2(number: $number) { id } } }`, root)
+	var resp map[string]*struct {
+		ProjectV2 *struct {
+			ID string `json:"id"`
+		} `json:"projectV2"`
+	}
+	if err := c.graphql(ctx, query, map[string]any{"login": login, "number": number}, &resp); err != nil {
+		return "", err
+	}
+	owner := resp[root]
+	if owner == nil || owner.ProjectV2 == nil || owner.ProjectV2.ID == "" {
+		return "", fmt.Errorf("Project %s/%d が見つかりません（owner_type: %s）", login, number, ownerType)
+	}
+	return owner.ProjectV2.ID, nil
+}
+
+// mergeOptions は既存の選択肢を保持したまま、要求された選択肢を揃えた入力を作る。
+//
+// updateProjectV2Field の singleSelectOptions は全置換で、id を渡さない選択肢は
+// 別物として作り直される。そのため
+//   - 同名の既存選択肢には id を引き継ぐ（カードの Status 値が消えるのを防ぐ）
+//   - 要求に無い既存選択肢も末尾に残す（消すとその値のカードが空になる）
+//
+// という 2 点を守る必要がある。
+func mergeOptions(existing []SingleSelectOption, want []SingleSelectOptionInput) []SingleSelectOptionInput {
+	byName := make(map[string]SingleSelectOption, len(existing))
+	for _, o := range existing {
+		byName[o.Name] = o
+	}
+	wanted := make(map[string]bool, len(want))
+
+	out := make([]SingleSelectOptionInput, 0, len(want)+len(existing))
+	for _, w := range want {
+		wanted[w.Name] = true
+		if o, ok := byName[w.Name]; ok {
+			w.ID = o.ID
+		}
+		out = append(out, w)
+	}
+	for _, o := range existing {
+		if wanted[o.Name] {
+			continue
+		}
+		out = append(out, SingleSelectOptionInput(o))
+	}
+	return out
+}
+
+// ConfigureProjectStatuses は既存の GitHub Projects v2 に対して Status 選択肢を設定・修復する。
+//
+// 既存の選択肢は名前が一致すれば id ごと引き継ぎ、定義外の選択肢も残す。
+// カードに入っている Status を失わせないための措置（mergeOptions を参照）。
+func (c *Client) ConfigureProjectStatuses(ctx context.Context, projectID, fieldName string, options []SingleSelectOptionInput) error {
+	return c.configureStatuses(ctx, projectID, fieldName, options, true)
+}
+
+// configureStatuses は preserveExisting が true のとき既存選択肢を保持する。
+//
+// 新規作成直後の Project はカードが 0 件で、既定の Todo / In Progress / Done を
+// 残す意味が無いため、作成経路だけは false で呼んで置き換える。
+func (c *Client) configureStatuses(ctx context.Context, projectID, fieldName string, options []SingleSelectOptionInput, preserveExisting bool) error {
+	if len(options) == 0 {
+		options = DefaultStatuses
+	}
+
+	// 1. プロジェクトのフィールド一覧と、既存の選択肢を取得
+	var fieldsResp struct {
+		Node *struct {
+			Fields struct {
+				Nodes []struct {
+					ID      string               `json:"id"`
+					Name    string               `json:"name"`
+					Options []SingleSelectOption `json:"options"`
+				} `json:"nodes"`
+			} `json:"fields"`
+		} `json:"node"`
+	}
+	if err := c.graphql(ctx, projectFieldsQuery, map[string]any{"id": projectID}, &fieldsResp); err != nil {
+		return fmt.Errorf("フィールド一覧の取得に失敗: %w", err)
+	}
+
+	var targetFieldID string
+	var existing []SingleSelectOption
+	if fieldsResp.Node != nil {
+		for _, f := range fieldsResp.Node.Fields.Nodes {
+			if f.Name == fieldName {
+				targetFieldID = f.ID
+				existing = f.Options
+				break
+			}
+		}
+	}
+
+	// 2. Status フィールドの選択肢を更新、または新規作成
+	if targetFieldID != "" {
+		if preserveExisting {
+			options = mergeOptions(existing, options)
+		}
+		vars := map[string]any{
+			"fieldId": targetFieldID,
+			"name":    fieldName,
+			"options": options,
+		}
+		if err := c.graphql(ctx, updateFieldMutation, vars, nil); err != nil {
+			return fmt.Errorf("フィールド %q の更新に失敗: %w", fieldName, err)
+		}
+	} else {
+		vars := map[string]any{
+			"projectId": projectID,
+			"name":      fieldName,
+			"options":   options,
+		}
+		if err := c.graphql(ctx, createFieldMutation, vars, nil); err != nil {
+			return fmt.Errorf("フィールド %q の作成に失敗: %w", fieldName, err)
+		}
+	}
+	return nil
+}
+
+// CreateProjectWithStatuses は GitHub Projects v2 を新規作成し、autopilot 向けの Status 選択肢を設定する。
+func (c *Client) CreateProjectWithStatuses(ctx context.Context, ownerType, login, title, fieldName string, options []SingleSelectOptionInput) (*ProjectInfo, error) {
+	if len(options) == 0 {
+		options = DefaultStatuses
+	}
+	ownerID, err := c.ResolveOwnerID(ctx, ownerType, login)
+	if err != nil {
+		return nil, err
+	}
+
+	// 1. Project v2 を新規作成
+	var createResp struct {
+		CreateProjectV2 struct {
+			ProjectV2 struct {
+				ID     string `json:"id"`
+				Number int    `json:"number"`
+				URL    string `json:"url"`
+				Title  string `json:"title"`
+			} `json:"projectV2"`
+		} `json:"createProjectV2"`
+	}
+	if err := c.graphql(ctx, createProjectMutation, map[string]any{"ownerId": ownerID, "title": title}, &createResp); err != nil {
+		return nil, fmt.Errorf("Project の作成に失敗: %w", err)
+	}
+	proj := createResp.CreateProjectV2.ProjectV2
+	info := &ProjectInfo{
+		ID:     proj.ID,
+		Number: proj.Number,
+		URL:    proj.URL,
+		Title:  proj.Title,
+	}
+
+	// 2. Status フィールドの選択肢を設定
+	//    作成直後でカードが 0 件なので、既定の Todo / In Progress / Done は残さず置き換える。
+	if err := c.configureStatuses(ctx, info.ID, fieldName, options, false); err != nil {
+		return info, err
+	}
+
+	return info, nil
+}

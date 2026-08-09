@@ -23,18 +23,25 @@ Inbox ──[人間がドラッグ]──> Ready ──> In Progress ──> Ver
 
 ## セットアップ
 
-### 1. GitHub 側
+### 1. GitHub 側 (Project の作成)
 
-- Projects v2 に単一選択の `Status` フィールドを作り、選択肢を 7 つ用意する
-  （`📥 Inbox` / `🎯 Ready` / `🚧 In Progress` / `🔍 Verifying` / `👀 In Review` / `⏸ Blocked` / `✅ Done`）
-- Project の **Auto-add workflow** を有効にする（Issue が自動でカード化される）
-- Project の組み込みワークフロー **「Item closed → Status: Done」** を有効にする
-- **classic PAT** を発行する。`repo` と **`project`** スコープが必要
-  （Actions の `GITHUB_TOKEN` では Project を操作できない）
+**`autopilot setup-project`** コマンドを使うと、7 つのステータス（カラー付き）を備えた Projects v2 を一発で作成できる:
 
 ```sh
+# 認証トークンの設定 (classic PAT: repo, project スコープが必要)
 export GH_TOKEN=ghp_xxxxxxxxxxxx
+
+# Project の作成 (個人アカウントの場合)
+go run ./cmd/autopilot setup-project --title "Autopilot Board"
+
+# Organization 配下に作成する場合
+# go run ./cmd/autopilot setup-project --owner my-org --owner-type organization --title "Autopilot Board"
 ```
+
+コマンド完了時に表示される `project:` 設定スニペットを、`config.yaml` にそのまま貼り付ければ完了です。
+
+- Project の **Auto-add workflow** を有効にする（Issue が自動でカード化される）
+- Project の組み込みワークフロー **「Item closed → Status: Done」** を有効にする
 
 ### 2. 設定
 

@@ -19,6 +19,8 @@ import (
 	"nuage-autopilot2/internal/agent"
 	"nuage-autopilot2/internal/config"
 	"nuage-autopilot2/internal/engine"
+	"nuage-autopilot2/internal/gh"
+	"nuage-autopilot2/internal/workspace"
 )
 
 const usage = `autopilot - 自動開発パイプラインの常駐ワーカー
@@ -27,10 +29,11 @@ const usage = `autopilot - 自動開発パイプラインの常駐ワーカー
   autopilot <command> [flags]
 
 コマンド:
-  run       常駐してパイプラインを回す
-  init      コールドスタートのシードを行う（現在を処理済みとして記録する）
-  status    ローカル状態を一覧表示する
-  doctor    設定と前提条件を検証して終了する
+  run             常駐してパイプラインを回す
+  init            コールドスタートのシードを行う（現在を処理済みとして記録する）
+  status          ローカル状態を一覧表示する
+  doctor          設定と前提条件を検証して終了する
+  setup-project   GitHub Projects v2 を作成し、7 つの Status 選択肢を設定する
 
 共通フラグ:
   -c, --config <path>   設定ファイル（既定: config.yaml）
@@ -55,6 +58,14 @@ func run() error {
 		return nil
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// setup-project は設定ファイルなしで単独実行できる。
+	if cmd == "setup-project" {
+		return cmdSetupProject(ctx, os.Args[2:])
+	}
+
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	var cfgPath string
 	var verbose bool
@@ -77,9 +88,6 @@ func run() error {
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	switch cmd {
 	case "run":
 		return cmdRun(ctx, cfg, log)
@@ -93,6 +101,96 @@ func run() error {
 		fmt.Print(usage)
 		return fmt.Errorf("未知のコマンド: %s", cmd)
 	}
+}
+
+func cmdSetupProject(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("setup-project", flag.ExitOnError)
+	var title, owner, ownerType, fieldName, cfgPath string
+	var forceNew bool
+	fs.StringVar(&cfgPath, "config", "config.yaml", "設定ファイルのパス")
+	fs.StringVar(&cfgPath, "c", "config.yaml", "設定ファイルのパス（短縮形）")
+	fs.StringVar(&title, "title", "Autopilot Board", "作成するプロジェクトのタイトル（新規作成時）")
+	fs.StringVar(&owner, "owner", "", "GitHub オーナー名（未指定なら設定ファイルまたは認証ユーザー）")
+	fs.StringVar(&ownerType, "owner-type", "", "オーナーの種別: user または organization")
+	fs.StringVar(&fieldName, "field", "", "Status を管理するフィールド名")
+	fs.BoolVar(&forceNew, "new", false, "設定ファイルの Project 番号を無視して新規作成する")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	client, err := gh.New()
+	if err != nil {
+		return err
+	}
+
+	// 既存の config.yaml を読めるか試行
+	cfg, cfgErr := config.Load(cfgPath)
+	if cfgErr == nil && !forceNew && cfg.Project.Number > 0 {
+		// --- 既存 Project の修復モード ---
+		if owner == "" {
+			owner = cfg.Project.Owner
+		}
+		if ownerType == "" {
+			ownerType = cfg.Project.OwnerType
+		}
+		if fieldName == "" {
+			fieldName = cfg.Project.StatusField
+		}
+		fmt.Printf("既存の Project %s/%d の Status 選択肢を修復・設定しています...\n", owner, cfg.Project.Number)
+		projectID, err := client.GetProjectID(ctx, ownerType, owner, cfg.Project.Number)
+		if err != nil {
+			return fmt.Errorf("Project の取得に失敗: %w", err)
+		}
+		if err := client.ConfigureProjectStatuses(ctx, projectID, fieldName, nil); err != nil {
+			return err
+		}
+		fmt.Printf("\n✨ Project %s/%d の Status 選択肢（7ステータス）を正常に設定・修復しました！\n", owner, cfg.Project.Number)
+		return nil
+	}
+
+	// --- 新規作成モード ---
+	if owner == "" {
+		if cfgErr == nil && cfg.Project.Owner != "" {
+			owner = cfg.Project.Owner
+		} else {
+			if err := client.ResolveLogin(ctx); err != nil {
+				return fmt.Errorf("認証ユーザーの取得に失敗: %w", err)
+			}
+			owner = client.Login
+		}
+	}
+	if ownerType == "" {
+		if cfgErr == nil && cfg.Project.OwnerType != "" {
+			ownerType = cfg.Project.OwnerType
+		} else {
+			ownerType = "user"
+		}
+	}
+	if fieldName == "" {
+		fieldName = "Status"
+	}
+
+	fmt.Printf("GitHub Projects v2 を新規作成しています (owner: %s, type: %s, title: %q)...\n", owner, ownerType, title)
+	info, err := client.CreateProjectWithStatuses(ctx, ownerType, owner, title, fieldName, nil)
+	if err != nil {
+		// Project 自体は作成済みのことがある。番号を伝えないと、リトライのたびに
+		// 空の Project が増え続けてしまう。
+		if info != nil && info.Number > 0 {
+			fmt.Printf("\n⚠️  Project #%d は作成されましたが、Status 選択肢の設定に失敗しました。\n", info.Number)
+			fmt.Printf("    URL: %s\n", info.URL)
+			fmt.Printf("    修復するには config.yaml に number: %d を設定して `autopilot setup-project` を再実行してください。\n", info.Number)
+			fmt.Printf("    （--new を付けると別の Project が新規作成されます）\n\n")
+		}
+		return err
+	}
+
+	fmt.Printf("\n✨ GitHub Projects v2 のセットアップが完了しました！\n\n")
+	fmt.Printf("  プロジェクト番号: #%d\n", info.Number)
+	fmt.Printf("  URL:             %s\n\n", info.URL)
+	fmt.Printf("以下の設定を config.yaml の project セクションに貼り付けてください:\n\n")
+	fmt.Printf("```yaml\nproject:\n  owner: \"%s\"\n  number: %d\n  owner_type: \"%s\"\n  status_field: \"%s\"\n```\n",
+		owner, info.Number, ownerType, fieldName)
+	return nil
 }
 
 func cmdRun(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
@@ -146,16 +244,47 @@ func cmdStatus(ctx context.Context, cfg *config.Config, log *slog.Logger) error 
 }
 
 func cmdDoctor(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
-	// engine.New が Project の解決と Status 名の検証まで行う。
-	e, err := engine.New(ctx, cfg, log)
+	hasError := false
+
+	client, err := gh.New()
 	if err != nil {
+		fmt.Printf("✗ トークン: %v\n", err)
 		return err
 	}
-	defer e.Close()
+	if err := client.ResolveLogin(ctx); err != nil {
+		fmt.Printf("✗ 認証ユーザーの取得に失敗: %v\n", err)
+		return err
+	}
+	fmt.Printf("✓ 認証ユーザー: %s\n", client.Login)
 
-	fmt.Printf("✓ 認証ユーザー: %s\n", e.Login())
-	fmt.Printf("✓ Project: %s/%d (Status フィールドの選択肢は設定と一致)\n",
-		cfg.Project.Owner, cfg.Project.Number)
+	project, err := client.LoadProject(ctx, cfg.Project.OwnerType, cfg.Project.Owner,
+		cfg.Project.Number, cfg.Project.StatusField)
+	if err != nil {
+		fmt.Printf("✗ Project %s/%d: %v\n", cfg.Project.Owner, cfg.Project.Number, err)
+		fmt.Println("  ➔ 💡 対処法: `autopilot setup-project` を実行すると自動で修復・設定できます")
+		hasError = true
+	} else {
+		// 各 Status 名が存在するか検証
+		var missing []string
+		for _, s := range []string{
+			cfg.Statuses.Inbox, cfg.Statuses.Ready, cfg.Statuses.InProgress,
+			cfg.Statuses.Verifying, cfg.Statuses.InReview, cfg.Statuses.Blocked, cfg.Statuses.Done,
+		} {
+			if _, err := project.OptionID(s); err != nil {
+				missing = append(missing, s)
+			}
+		}
+		if len(missing) > 0 {
+			fmt.Printf("✗ Project %s/%d: Status 選択肢が不足しています: %v\n",
+				cfg.Project.Owner, cfg.Project.Number, missing)
+			fmt.Println("  ➔ 💡 対処法: `autopilot setup-project` を実行すると自動で選択肢を追加・修復できます")
+			hasError = true
+		} else {
+			fmt.Printf("✓ Project: %s/%d (Status フィールドの選択肢は設定と一致)\n",
+				cfg.Project.Owner, cfg.Project.Number)
+		}
+	}
+
 	fmt.Printf("✓ DB: %s\n", cfg.Database)
 	fmt.Printf("✓ ワークスペース: %s\n", cfg.Workspace)
 
@@ -164,17 +293,18 @@ func cmdDoctor(ctx context.Context, cfg *config.Config, log *slog.Logger) error 
 		command := spec.ResolvedCommand()
 		adapter := spec.Adapter()
 
-		// 実際に投げる引数を組み立てて見せる。プロンプトは <prompt> に伏せる。
 		inv, err := adapter.Build(agent.Request{
 			Prompt: "<prompt>", Model: spec.Model, ExtraArgs: spec.ExtraArgs, Timeout: spec.Timeout,
 		})
 		if err != nil {
 			fmt.Printf("✗ エージェント %s: 起動引数を組み立てられません: %v\n", use, err)
+			hasError = true
 			continue
 		}
 		mark := "✓"
 		if _, err := exec.LookPath(command); err != nil {
 			mark = "✗"
+			hasError = true
 		}
 		fmt.Printf("%s エージェント %s (adapter: %s, timeout %s)\n    %s %s\n",
 			mark, use, adapter.Name(), spec.Timeout, command, strings.Join(inv.DisplayArgs(), " "))
@@ -186,20 +316,27 @@ func cmdDoctor(ctx context.Context, cfg *config.Config, log *slog.Logger) error 
 		}
 	}
 
+	ws := workspace.New(cfg.Workspace, "GH_TOKEN", "", "")
 	repos := make([]string, 0, len(cfg.Repos))
 	for _, r := range cfg.Repos {
 		repos = append(repos, r.String())
 	}
 	fmt.Printf("… リポジトリを同期しています: %v\n", repos)
-	if err := e.EnsureRepos(ctx); err != nil {
-		return err
+	if err := ws.EnsureAll(ctx, repos); err != nil {
+		fmt.Printf("✗ リポジトリの同期に失敗: %v\n", err)
+		hasError = true
+	} else {
+		fmt.Printf("✓ リポジトリの clone を確認しました\n")
 	}
-	fmt.Printf("✓ リポジトリの clone を確認しました\n")
 
 	fmt.Println()
 	fmt.Println("次の前提条件は API から検証できないため、手動で確認してください:")
 	fmt.Println("  - Project の Auto-add workflow が有効（Issue が自動でカード化される）")
 	fmt.Println("  - Project の組み込みワークフロー「Item closed → Status: Done」が有効")
 	fmt.Println("  - トークンに project スコープ（classic PAT）があること")
+
+	if hasError {
+		return errors.New("一部の前提条件が満たされていません")
+	}
 	return nil
 }
