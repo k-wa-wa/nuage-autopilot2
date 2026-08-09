@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/k-wa-wa/nuage-autopilot2/internal/agent"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/config"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/gh"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/prompt"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/store"
+	"nuage-autopilot2/internal/agent"
+	"nuage-autopilot2/internal/config"
+	"nuage-autopilot2/internal/gh"
+	"nuage-autopilot2/internal/prompt"
+	"nuage-autopilot2/internal/store"
 )
 
 // ciFailureHint は CI 失敗時に実装エージェントへ渡す調査の手がかり。

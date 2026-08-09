@@ -1,4 +1,4 @@
-module github.com/k-wa-wa/nuage-autopilot2
+module nuage-autopilot2
 
 go 1.26.4
 

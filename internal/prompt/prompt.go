@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/k-wa-wa/nuage-autopilot2/internal/gh"
+	"nuage-autopilot2/internal/gh"
 )
 
 // Context はプロンプト生成に必要な情報。

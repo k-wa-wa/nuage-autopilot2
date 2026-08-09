@@ -15,8 +15,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/k-wa-wa/nuage-autopilot2/internal/config"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/engine"
+	"nuage-autopilot2/internal/config"
+	"nuage-autopilot2/internal/engine"
 )
 
 const usage = `autopilot - 自動開発パイプラインの常駐ワーカー

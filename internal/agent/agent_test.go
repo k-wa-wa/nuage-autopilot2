@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/k-wa-wa/nuage-autopilot2/internal/config"
+	"nuage-autopilot2/internal/config"
 )
 
 func TestParseMarkers(t *testing.T) {

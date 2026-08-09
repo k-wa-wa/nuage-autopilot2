@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/k-wa-wa/nuage-autopilot2/internal/config"
+	"nuage-autopilot2/internal/config"
 )
 
 // Runner はエージェントプロセスを起動する。

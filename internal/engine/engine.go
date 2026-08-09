@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/k-wa-wa/nuage-autopilot2/internal/agent"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/config"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/gh"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/store"
-	"github.com/k-wa-wa/nuage-autopilot2/internal/workspace"
+	"nuage-autopilot2/internal/agent"
+	"nuage-autopilot2/internal/config"
+	"nuage-autopilot2/internal/gh"
+	"nuage-autopilot2/internal/store"
+	"nuage-autopilot2/internal/workspace"
 )
 
 // EventKind はイベントの種別。
