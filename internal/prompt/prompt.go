@@ -14,16 +14,17 @@ import (
 
 // Context はプロンプト生成に必要な情報。
 type Context struct {
-	Repo       string
-	Issue      *gh.Issue
-	Comments   []gh.Comment
-	NewInputs  []string // 今回の起床要因となった人間の発言
-	PRNumber   int
-	Gate       string // 品質ゲート定義ファイルの内容
-	GatePath   string
-	RetryCount int
-	MaxRetries int
-	CIHint     string // CI 失敗などの追加情報
+	Repo           string
+	Issue          *gh.Issue
+	Comments       []gh.Comment
+	ReviewComments []gh.ReviewComment // PR の diff に付いた行コメント
+	NewInputs      []string           // 今回の起床要因となった人間の発言
+	PRNumber       int
+	Gate           string // 品質ゲート定義ファイルの内容
+	GatePath       string
+	RetryCount     int
+	MaxRetries     int
+	CIHint         string // CI 失敗などの追加情報
 }
 
 const common = `あなたは自動開発パイプラインで動作する自律エージェントです。
@@ -159,7 +160,8 @@ func Triage(c Context, mode TriageMode) string {
 内容を読み、次のどちらかを判断してください。
 
 - **質問に答えれば済む場合**: `+"`gh pr comment`"+` で回答を投稿し、ANSWERED を報告する。
-  コードは変更しないこと。
+  コードは変更しないこと。指摘が特定の行に付いている場合は、PR 全体へのコメントではなく
+  `+"`gh api`"+` でその行コメントに返信すると文脈が保たれる。
 - **コードの修正が必要な場合**: この場ではまだ修正せず、NEEDS_FIX を報告する。
   ワーカーが実装フェーズに戻したうえで、改めて修正を依頼します。
 
@@ -211,6 +213,21 @@ func issueSection(c Context) string {
 			fmt.Fprintf(&b, "\n### @%s (%s)\n%s\n",
 				cm.User.Login, cm.CreatedAt.Format(time.RFC3339), strings.TrimSpace(cm.Body))
 		}
+	}
+	b.WriteString(reviewCommentSection(c))
+	return b.String()
+}
+
+// reviewCommentSection は PR の diff に付いた行コメントを指摘箇所つきで並べる。
+func reviewCommentSection(c Context) string {
+	if len(c.ReviewComments) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n## PR #%d の行コメント（古い順、最大 %d 件）\n", c.PRNumber, len(c.ReviewComments))
+	for _, rc := range c.ReviewComments {
+		fmt.Fprintf(&b, "\n### @%s `%s` (%s)\n%s\n",
+			rc.User.Login, rc.Location(), rc.CreatedAt.Format(time.RFC3339), strings.TrimSpace(rc.Body))
 	}
 	return b.String()
 }

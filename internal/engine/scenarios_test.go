@@ -25,14 +25,15 @@ import (
 
 // fakeGitHub はテスト用の GitHub REST / GraphQL サーバー。
 type fakeGitHub struct {
-	mu            sync.Mutex
-	statusRecord  []string // setStatus で設定された status の履歴
-	comments      []string // AddComment で投稿された本文
-	issueComments []gh.Comment
-	prState       string // "OPEN", "CLOSED", "MERGED"
-	prCheckState  string // "SUCCESS", "FAILURE", "PENDING"
-	linkedPRNum   int
-	reviews       []gh.Review
+	mu             sync.Mutex
+	statusRecord   []string // setStatus で設定された status の履歴
+	comments       []string // AddComment で投稿された本文
+	issueComments  []gh.Comment
+	prState        string // "OPEN", "CLOSED", "MERGED"
+	prCheckState   string // "SUCCESS", "FAILURE", "PENDING"
+	linkedPRNum    int
+	reviews        []gh.Review
+	reviewComments []gh.ReviewComment
 }
 
 func newFakeGitHubServer(t *testing.T, s *fakeGitHub) *httptest.Server {
@@ -54,6 +55,10 @@ func newFakeGitHubServer(t *testing.T, s *fakeGitHub) *httptest.Server {
 				Body:   "Implement feature X",
 				State:  "open",
 			})
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/pulls/") && strings.Contains(r.URL.Path, "/comments") {
+			json.NewEncoder(w).Encode(s.reviewComments)
 			return
 		}
 		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/comments") {
@@ -603,6 +608,152 @@ echo "AUTOPILOT_REASON: Resuming with user advice"
 	}
 	if item.LastCommentID != 51 {
 		t.Errorf("LastCommentID = %d, want 51", item.LastCommentID)
+	}
+}
+
+// シナリオ 3b: サマリ無しで行コメントだけを送ったレビューも起床トリガーになる。
+func TestScenario_InlineCommentsOnly_TriggersTriage(t *testing.T) {
+	fake := &fakeGitHub{
+		prState:      "OPEN",
+		prCheckState: "SUCCESS",
+		linkedPRNum:  2,
+		reviews: []gh.Review{
+			{ID: 101, Body: "", State: "COMMENTED", User: gh.User{Login: "reviewer-san"}},
+		},
+		reviewComments: []gh.ReviewComment{
+			{ID: 201, ReviewID: 101, Body: "nil チェックが必要では？", Path: "internal/foo.go", Line: 42,
+				User: gh.User{Login: "reviewer-san"}},
+			{ID: 202, ReviewID: 101, Body: "typo", Path: "internal/bar.go", OriginalLine: 7,
+				User: gh.User{Login: "reviewer-san"}},
+		},
+	}
+	e, _, cleanup := setupTestEngine(t, fake, "#!/bin/sh\ncat > /dev/null\n")
+	defer cleanup()
+
+	ctx := context.Background()
+	e.st.Upsert(&store.Item{
+		Repo: "owner/repo", IssueNumber: 1, ProjectItemID: "item_1",
+		LastStatus: "👀 In Review", PRNumber: 2,
+	})
+
+	if err := e.handleReview(ctx, Event{Kind: EvReview, Repo: "owner/repo", Issue: 1}); err != nil {
+		t.Fatalf("handleReview failed: %v", err)
+	}
+
+	job := mustJob(t, e, PhaseTriageReview)
+	if len(job.Inputs) != 1 {
+		t.Fatalf("Inputs = %d 件, want 1（1 レビューは 1 入力にまとまる）: %v", len(job.Inputs), job.Inputs)
+	}
+	for _, want := range []string{"internal/foo.go:42", "internal/bar.go:7", "nil チェック", "typo"} {
+		if !strings.Contains(job.Inputs[0], want) {
+			t.Errorf("Inputs[0] に %q が含まれていません:\n%s", want, job.Inputs[0])
+		}
+	}
+
+	// 2 回目は新規が無いので起床しない。
+	if err := e.handleReview(ctx, Event{Kind: EvReview, Repo: "owner/repo", Issue: 1}); err != nil {
+		t.Fatalf("2 回目の handleReview failed: %v", err)
+	}
+	select {
+	case job := <-e.jobs:
+		t.Fatalf("処理済みのレビューで再度起床しました: %+v", job)
+	default:
+	}
+}
+
+// シナリオ 3c: Approve は本文だけなら無視し、行コメント（nit）が付いていれば拾う。
+func TestScenario_ApprovedReview_OnlyWakesWithInlineComments(t *testing.T) {
+	fake := &fakeGitHub{
+		prState: "OPEN", prCheckState: "SUCCESS", linkedPRNum: 2,
+		reviews: []gh.Review{
+			{ID: 101, Body: "LGTM!", State: "APPROVED", User: gh.User{Login: "reviewer-san"}},
+		},
+	}
+	e, _, cleanup := setupTestEngine(t, fake, "#!/bin/sh\ncat > /dev/null\n")
+	defer cleanup()
+
+	ctx := context.Background()
+	e.st.Upsert(&store.Item{
+		Repo: "owner/repo", IssueNumber: 1, ProjectItemID: "item_1",
+		LastStatus: "👀 In Review", PRNumber: 2,
+	})
+
+	if err := e.handleReview(ctx, Event{Kind: EvReview, Repo: "owner/repo", Issue: 1}); err != nil {
+		t.Fatalf("handleReview failed: %v", err)
+	}
+	select {
+	case job := <-e.jobs:
+		t.Fatalf("LGTM だけの Approve で起床しました: %+v", job)
+	default:
+	}
+
+	// 同じレビュアーが後から nit を追加する（レビュー自体は処理済み）。
+	fake.mu.Lock()
+	fake.reviewComments = []gh.ReviewComment{
+		{ID: 201, ReviewID: 101, Body: "ここは定数にしたい", Path: "internal/foo.go", Line: 3,
+			User: gh.User{Login: "reviewer-san"}},
+	}
+	fake.mu.Unlock()
+
+	if err := e.handleReview(ctx, Event{Kind: EvReview, Repo: "owner/repo", Issue: 1}); err != nil {
+		t.Fatalf("2 回目の handleReview failed: %v", err)
+	}
+	job := mustJob(t, e, PhaseTriageReview)
+	if !strings.Contains(job.Inputs[0], "internal/foo.go:3") {
+		t.Errorf("行コメントが入力に含まれていません:\n%s", job.Inputs[0])
+	}
+	// 処理済みレビューの本文は蒸し返さない。
+	if strings.Contains(job.Inputs[0], "LGTM") {
+		t.Errorf("処理済みの Approve 本文が再送されています:\n%s", job.Inputs[0])
+	}
+}
+
+// Bot 自身の行コメントでは起床せず、カーソルだけが進む。
+func TestScenario_OwnInlineComment_DoesNotWake(t *testing.T) {
+	fake := &fakeGitHub{
+		prState: "OPEN", prCheckState: "SUCCESS", linkedPRNum: 2,
+		reviews: []gh.Review{
+			{ID: 101, Body: "", State: "COMMENTED", User: gh.User{Login: "test-bot"}},
+		},
+		reviewComments: []gh.ReviewComment{
+			{ID: 201, ReviewID: 101, Body: "対応しました", Path: "internal/foo.go", Line: 42,
+				User: gh.User{Login: "test-bot"}},
+		},
+	}
+	e, _, cleanup := setupTestEngine(t, fake, "#!/bin/sh\ncat > /dev/null\n")
+	defer cleanup()
+
+	ctx := context.Background()
+	e.st.Upsert(&store.Item{
+		Repo: "owner/repo", IssueNumber: 1, ProjectItemID: "item_1",
+		LastStatus: "👀 In Review", PRNumber: 2,
+	})
+
+	if err := e.handleReview(ctx, Event{Kind: EvReview, Repo: "owner/repo", Issue: 1}); err != nil {
+		t.Fatalf("handleReview failed: %v", err)
+	}
+	select {
+	case job := <-e.jobs:
+		t.Fatalf("自分の行コメントで起床しました: %+v", job)
+	default:
+	}
+	if got, _ := e.st.Cursor("review-comment:owner/repo#2"); got != "201" {
+		t.Errorf("行コメントのカーソル = %q, want 201", got)
+	}
+}
+
+func mustJob(t *testing.T, e *Engine, phase string) Job {
+	t.Helper()
+	select {
+	case job := <-e.jobs:
+		e.release(job.Repo, job.Issue)
+		if job.Phase != phase {
+			t.Fatalf("Job.Phase = %q, want %s", job.Phase, phase)
+		}
+		return job
+	case <-time.After(3 * time.Second):
+		t.Fatalf("%s ジョブが投入されませんでした", phase)
+		return Job{}
 	}
 }
 

@@ -247,9 +247,11 @@ func (e *Engine) handleComment(ctx context.Context, ev Event) error {
 	return nil
 }
 
-// handleReview は PR のレビュー提出を判定する。
+// handleReview は PR に届いたレビューを判定する。
 //
-// 起床トリガーとするのはレビュー提出のみで、インラインコメント単体は対象外。
+// 起床トリガーはレビュー提出の本文と diff のインラインコメントの両方。サマリを書かず
+// 行コメントだけを送るレビューは珍しくないため、本文の有無だけで判定すると指摘を
+// まるごと取りこぼす。両者は所属レビュー単位にまとめ、1 レビュー = 1 入力にする。
 func (e *Engine) handleReview(ctx context.Context, ev Event) error {
 	it, err := e.load(ev.Repo, ev.Issue)
 	if err != nil || it == nil || it.Terminal || it.PRNumber == 0 {
@@ -258,48 +260,135 @@ func (e *Engine) handleReview(ctx context.Context, ev Event) error {
 	if it.LastStatus != e.cfg.Statuses.InReview {
 		return nil
 	}
-	ck := fmt.Sprintf("review:%s#%d", it.Repo, it.PRNumber)
-	raw, err := e.st.Cursor(ck)
+	// レビューと行コメントは別の ID 空間なので、カーソルも別々に持つ。
+	reviewCK := fmt.Sprintf("review:%s#%d", it.Repo, it.PRNumber)
+	inlineCK := fmt.Sprintf("review-comment:%s#%d", it.Repo, it.PRNumber)
+	lastReview, err := e.cursorID(reviewCK)
 	if err != nil {
 		return err
 	}
-	last, _ := strconv.ParseInt(raw, 10, 64)
+	lastInline, err := e.cursorID(inlineCK)
+	if err != nil {
+		return err
+	}
 
 	reviews, err := e.client.ListReviews(ctx, it.Repo, it.PRNumber)
 	if err != nil {
 		return err
 	}
-	maxID := last
-	var inputs []string
-	for _, r := range reviews {
-		if r.ID <= last {
+	inline, err := e.client.ListReviewComments(ctx, it.Repo, it.PRNumber)
+	if err != nil {
+		return err
+	}
+
+	// 新規の行コメントを所属レビューごとに束ねる。order は取得順（古い順）を保つため。
+	maxInline := lastInline
+	grouped := map[int64][]gh.ReviewComment{}
+	var order []int64
+	for _, rc := range inline {
+		if rc.ID <= lastInline {
 			continue
 		}
-		if r.ID > maxID {
-			maxID = r.ID
+		if rc.ID > maxInline {
+			maxInline = rc.ID
 		}
+		if rc.User.Login == e.client.Login || rc.User.IsBot() || strings.TrimSpace(rc.Body) == "" {
+			continue
+		}
+		if _, seen := grouped[rc.ReviewID]; !seen {
+			order = append(order, rc.ReviewID)
+		}
+		grouped[rc.ReviewID] = append(grouped[rc.ReviewID], rc)
+	}
+
+	maxReview := lastReview
+	var inputs []string
+	for _, r := range reviews {
+		if r.ID > maxReview {
+			maxReview = r.ID
+		}
+		notes := grouped[r.ID]
+		delete(grouped, r.ID)
+
 		if r.User.Login == e.client.Login || r.User.IsBot() {
 			continue
 		}
-		// Approve と Dismiss は行動を要求しない。本文の無いレビューも同様。
-		if r.State == "APPROVED" || r.State == "DISMISSED" {
+		// Dismiss はレビューの取り消しで、行動を要求しない。
+		if r.State == "DISMISSED" {
 			continue
 		}
-		if strings.TrimSpace(r.Body) == "" {
+		body := strings.TrimSpace(r.Body)
+		switch {
+		case r.ID <= lastReview:
+			// 本文は処理済み。後から付いた行コメントだけを拾う。
+			body = ""
+		case r.State == "APPROVED":
+			// Approve の本文は LGTM の類なので拾わない。ただし行コメントが付いていれば
+			// nit の指摘なので、それだけを拾う。
+			body = ""
+		}
+		if body == "" && len(notes) == 0 {
 			continue
 		}
-		inputs = append(inputs, fmt.Sprintf("@%s (%s):\n%s", r.User.Login, r.State, strings.TrimSpace(r.Body)))
+		inputs = append(inputs, formatReviewInput(r.User.Login, r.State, body, notes))
 	}
-	if maxID == last {
+	// レビュー一覧に現れなかった行コメント（保険）。
+	for _, id := range order {
+		notes := grouped[id]
+		if len(notes) == 0 {
+			continue
+		}
+		inputs = append(inputs, formatReviewInput(notes[0].User.Login, "", "", notes))
+	}
+
+	if maxReview == lastReview && maxInline == lastInline {
+		return nil
+	}
+	advance := func() error {
+		if maxReview != lastReview {
+			if err := e.st.SetCursor(reviewCK, strconv.FormatInt(maxReview, 10)); err != nil {
+				return err
+			}
+		}
+		if maxInline != lastInline {
+			return e.st.SetCursor(inlineCK, strconv.FormatInt(maxInline, 10))
+		}
 		return nil
 	}
 	if len(inputs) == 0 {
-		return e.st.SetCursor(ck, strconv.FormatInt(maxID, 10))
+		return advance()
 	}
 	if e.enqueue(ctx, Job{Phase: PhaseTriageReview, Repo: it.Repo, Issue: it.IssueNumber, Inputs: inputs}) {
-		return e.st.SetCursor(ck, strconv.FormatInt(maxID, 10))
+		return advance()
 	}
 	return nil
+}
+
+// formatReviewInput はレビュー本文と行コメントを 1 件の入力にまとめる。
+func formatReviewInput(author, state, body string, notes []gh.ReviewComment) string {
+	var b strings.Builder
+	if state != "" {
+		fmt.Fprintf(&b, "@%s (%s):", author, state)
+	} else {
+		fmt.Fprintf(&b, "@%s:", author)
+	}
+	if body != "" {
+		b.WriteString("\n" + body)
+	}
+	for _, n := range notes {
+		fmt.Fprintf(&b, "\n\n- `%s`\n  %s", n.Location(), strings.TrimSpace(n.Body))
+	}
+	return b.String()
+}
+
+// cursorID は ID を保存したカーソルを読む。未設定・不正値は 0。
+func (e *Engine) cursorID(name string) (int64, error) {
+	raw, err := e.st.Cursor(name)
+	if err != nil {
+		return 0, err
+	}
+	v, _ := strconv.ParseInt(raw, 10, 64)
+	return v, nil
 }
 
 // handleVerifyTick は Verifying の CI 状態を確認して分岐する。エージェントは起動しない。
@@ -453,17 +542,27 @@ func (e *Engine) promptContext(ctx context.Context, it *store.Item, inputs []str
 	if err != nil {
 		return prompt.Context{}, err
 	}
+	// 行コメントは PR ができてから初めて存在する。自分の返信も含めて渡すことで、
+	// 一度答えた指摘に再度反応することを防ぐ。
+	var reviewComments []gh.ReviewComment
+	if it.PRNumber != 0 {
+		reviewComments, err = e.client.LastReviewComments(ctx, it.Repo, it.PRNumber, e.cfg.Limits.ContextComments)
+		if err != nil {
+			return prompt.Context{}, err
+		}
+	}
 	return prompt.Context{
-		Repo:       it.Repo,
-		Issue:      issue,
-		Comments:   comments,
-		NewInputs:  inputs,
-		PRNumber:   it.PRNumber,
-		Gate:       e.ws.ReadFile(it.Repo, e.cfg.GateFile),
-		GatePath:   e.cfg.GateFile,
-		RetryCount: it.RetryCount,
-		MaxRetries: e.cfg.Limits.MaxRetries,
-		CIHint:     hint,
+		Repo:           it.Repo,
+		Issue:          issue,
+		Comments:       comments,
+		ReviewComments: reviewComments,
+		NewInputs:      inputs,
+		PRNumber:       it.PRNumber,
+		Gate:           e.ws.ReadFile(it.Repo, e.cfg.GateFile),
+		GatePath:       e.cfg.GateFile,
+		RetryCount:     it.RetryCount,
+		MaxRetries:     e.cfg.Limits.MaxRetries,
+		CIHint:         hint,
 	}, nil
 }
 

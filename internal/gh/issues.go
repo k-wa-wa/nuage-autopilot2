@@ -61,6 +61,38 @@ type Review struct {
 	HTMLURL     string    `json:"html_url"`
 }
 
+// ReviewComment は PR の diff に付いたインラインコメント。
+//
+// レビュー提出にまとめて含まれるものも、diff 上で単発に投稿されたものも同じ
+// エンドポイントから返る（後者にも GitHub 側で state=COMMENTED のレビューが作られる）。
+type ReviewComment struct {
+	ID       int64 `json:"id"`
+	ReviewID int64 `json:"pull_request_review_id"`
+	// InReplyToID は既存スレッドへの返信の場合に元コメントの ID。
+	InReplyToID int64  `json:"in_reply_to_id"`
+	Body        string `json:"body"`
+	Path        string `json:"path"`
+	// Line は現在の diff 上の行番号。差分が古くなると null になるため、
+	// その場合は OriginalLine（投稿時点の行番号）で補う。
+	Line         int       `json:"line"`
+	OriginalLine int       `json:"original_line"`
+	User         User      `json:"user"`
+	CreatedAt    time.Time `json:"created_at"`
+	HTMLURL      string    `json:"html_url"`
+}
+
+// Location は "path:line" 形式で指摘箇所を返す。行が特定できなければパスのみ。
+func (r ReviewComment) Location() string {
+	line := r.Line
+	if line == 0 {
+		line = r.OriginalLine
+	}
+	if line == 0 {
+		return r.Path
+	}
+	return fmt.Sprintf("%s:%d", r.Path, line)
+}
+
 // GetIssue は Issue を 1 件取得する。
 func (c *Client) GetIssue(ctx context.Context, repo string, number int) (*Issue, error) {
 	var out Issue
@@ -101,6 +133,24 @@ func (c *Client) AddComment(ctx context.Context, repo string, number int, body s
 func (c *Client) ListReviews(ctx context.Context, repo string, prNumber int) ([]Review, error) {
 	path := fmt.Sprintf("/repos/%s/pulls/%d/reviews?per_page=100", repo, prNumber)
 	return restPaged[Review](ctx, c, path)
+}
+
+// ListReviewComments は PR の diff に付いたインラインコメントを取得する。
+func (c *Client) ListReviewComments(ctx context.Context, repo string, prNumber int) ([]ReviewComment, error) {
+	path := fmt.Sprintf("/repos/%s/pulls/%d/comments?per_page=100", repo, prNumber)
+	return restPaged[ReviewComment](ctx, c, path)
+}
+
+// LastReviewComments は直近 n 件のインラインコメントを取得する（プロンプトのコンテキスト用）。
+func (c *Client) LastReviewComments(ctx context.Context, repo string, prNumber, n int) ([]ReviewComment, error) {
+	all, err := c.ListReviewComments(ctx, repo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+	if len(all) > n {
+		all = all[len(all)-n:]
+	}
+	return all, nil
 }
 
 // PullRequest は PR の状態。

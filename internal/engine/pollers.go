@@ -210,4 +210,18 @@ func (e *Engine) reconcileOnce(ctx context.Context) {
 			e.emit(ctx, Event{Kind: EvComment, Repo: repo, Issue: is.Number})
 		}
 	}
+
+	// PR 側の動きは Issue の updated_at に現れないため、In Review の PR は直接見に行く。
+	// 通知を取りこぼしてもレビューが宙に浮かないようにする保険。
+	inReview, err := e.st.ListByStatus(e.cfg.Statuses.InReview)
+	if err != nil {
+		e.log.Error("In Review の一覧取得に失敗", "err", err)
+		return
+	}
+	for _, it := range inReview {
+		if it.PRNumber == 0 || !e.watched(it.Repo) {
+			continue
+		}
+		e.emit(ctx, Event{Kind: EvReview, Repo: it.Repo, Issue: it.IssueNumber})
+	}
 }
