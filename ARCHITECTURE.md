@@ -131,20 +131,129 @@ DB が空の状態で全 Issue の全コメント履歴を再生すると、過�
 - `In Progress`: `lease_until` を超えても更新がなければ、プロセス異常終了とみなし `Blocked` へ。
 - `Verifying`: CI 待ちが最大待機時間を超えたら `Blocked` へ。
 
-## 4. 未決定事項
+## 4. エージェント実行契約
 
-以下は実装着手前、または実装しながら確定させる。
+### 4.1 責務の分離
 
-1. **エージェント実行契約**
-   - ワークスペース管理（Issue ごとに clone か git worktree か。直列実行なら worktree 1本で足りる）
-   - ブランチ命名規則、push に使うクレデンシャル
-   - 権限モード、タイムアウト、コスト上限
-   - 実装用エージェントと検証（セルフレビュー）用エージェントのプロンプト分離
-2. **品質ゲート定義ファイルの規約**
-   - 対象リポジトリ内の固定パス（例: `.nuage/gates.md`）とフォーマット
-3. **PR コメントの検知範囲**
-   - Issue comment on PR / inline review comment / review submission (APPROVE, REQUEST_CHANGES) はそれぞれ API が異なる。どれを起床トリガーとするか
-4. **CLI のコマンド体系**
-   - 常駐化の前に単発コマンド（1周だけポーリングして1件処理して終了）を用意し、常駐モードをその繰り返しとして実装する方針
-5. **要検証: cross-reference の通知有無**
-   - 子Issue から親Issue を参照した際に親へ通知が飛ぶ場合、親Issue が子の起票ごとに起床する。実機で確認する（起床しても「何もせず寝る」で済む想定）
+> **エージェントは中身を書き、ワーカーは Status を動かす。**
+
+Issue 本文の更新・コメント投稿・子 Issue の起票・PR の作成はすべてエージェントが `gh` コマンドで行う。
+ワーカーが GitHub に書き込むのは **Project の Status** と、**Blocked 時の理由コメント**だけ。
+プロンプトではエージェントに対し Status フィールドを変更しないよう明示する。
+
+### 4.2 ワークスペース
+
+- 起動時に対象リポジトリを**すべて clone** する（`workspace` 配下に `owner/name` で配置）。
+- エージェント実行の直前に `fetch --prune` → `reset --hard` → `clean -fd` で origin の最新へ巻き戻す。
+  前回のクラッシュが残した未コミットの変更や未追跡ファイルはここで破棄される。
+- `In Progress` は直列なので、1 リポジトリにつきワークツリーは 1 本で足りる（worktree 分割はしない）。
+
+### 4.3 ブランチ
+
+**ワーカーはブランチ名を指定しない。** エージェントが任意の名前で作る。
+ワーカーは実装完了後に Issue の timeline（`CROSS_REFERENCED_EVENT` / `CONNECTED_EVENT`）から
+紐づく PR を発見し、その `headRefName` を DB に記録する。
+CI 失敗やレビュー指摘で `In Progress` に戻す際は、記録したブランチをチェックアウトしてから再開する。
+
+この経路が成立する前提として、**PR 本文に `Closes #<Issue番号>` を含めること**を実装プロンプトで要求する。
+
+### 4.4 認証
+
+`GH_TOKEN`（無ければ `GITHUB_TOKEN`）の classic PAT を全経路で流用する。
+
+- GitHub API: `Authorization: Bearer`
+- 子プロセス（`gh` / エージェント）: 環境変数として引き渡す
+- `git push`: clone 済みリポジトリのローカル設定に credential helper を仕込み、
+  環境変数からトークンを読ませる。**トークンをディスクに残さない**。
+
+  ```
+  credential.helper = !f() { echo "username=x-access-token"; echo "password=${GH_TOKEN}"; }; f
+  ```
+
+### 4.5 エージェントの起動
+
+設定ファイルで用途ごとにコマンドを差し替えられる（`claude` / その他の CLI を想定）。
+プロンプトは **stdin** で渡すため、CLI 側の引数仕様に依存しない。
+
+| 用途 | 既定 | 役割 |
+|---|---|---|
+| `refine` | `claude -p --dangerously-skip-permissions` | 仕様精緻化・質問・タスク分割 |
+| `implement` | 同上 | 実装・テスト・PR 作成 |
+| `review` | 同上 | セルフレビューと品質ゲート検証 |
+| `triage` | 同上 | レビュー指摘 / 助言コメントの判断 |
+
+タイムアウトは `implement` のみ長め（既定 2h）、他は 30m。超過時はプロセスを終了し `Blocked` へ送る。
+
+### 4.6 判断結果の受け取り（マーカー）
+
+エージェントの判断は、出力の**行頭マーカー**で受け取る。行頭でない同名文字列は拾わない。
+同じキーが複数回現れた場合は**最後の出力**を採用する（プロンプトの引用より実際の判断を優先するため）。
+
+| フェーズ | マーカー | 値 | ワーカーの遷移 |
+|---|---|---|---|
+| refine | `AUTOPILOT_ACTION` | `READY_FOR_HUMAN` / `QUESTION_POSTED` / `SPLIT` | いずれも Inbox に留まる（Ready は人間の判断） |
+| implement | `AUTOPILOT_ACTION` | `PR_READY` | PR を発見して `Verifying` |
+| implement | | `BLOCKED` | `Blocked` |
+| review | `AUTOPILOT_VERDICT` | `PASS` | `In Review`（retry_count をリセット） |
+| review | | `FAIL` | `In Progress` へ差し戻し（retry_count++） |
+| triage (In Review) | `AUTOPILOT_ACTION` | `ANSWERED` / `NEEDS_FIX` | 据え置き / `In Progress` |
+| triage (Blocked) | `AUTOPILOT_ACTION` | `RESUME` / `RESPEC` | `In Progress` / `Inbox` |
+
+`AUTOPILOT_REASON` は 1 行の理由。差し戻し時は次の実装プロンプトに、Blocked 時はコメントに載せる。
+
+## 5. 品質ゲート定義
+
+対象リポジトリの **`.agents/autopilot-gate.md`** を固定パスとする。
+存在すれば `review` フェーズのプロンプトにそのまま埋め込む。フォーマットは自由記述（プロンプト）。
+
+## 6. PR コメントの検知範囲
+
+起床トリガーとするのは **review submission のみ**。
+
+- `APPROVED` / `DISMISSED` は行動を要求しないため無視する（マージは人間が行い、クローズで終端になる）。
+- 本文が空のレビューも無視する。
+- インラインコメント単体（`pulls/comments`）は v0.1 では対象外。
+- Issue 本体へのコメントは通常のコメント経路で拾う。
+
+レビューのカーソルは `cursors` テーブルに `review:<repo>#<pr>` として保持する。
+
+## 7. CLI とプロセス構成
+
+単一バイナリ `nuage`。
+
+| コマンド | 役割 |
+|---|---|
+| `nuage run` | 常駐してパイプラインを回す |
+| `nuage init` | コールドスタートのシード（現在を処理済みとして記録） |
+| `nuage status` | ローカル状態の一覧表示 |
+| `nuage doctor` | 設定・トークン・Status 名・エージェントコマンド・clone の検証 |
+
+`run` は goroutine を分けた常駐構成をとる。ループごとに周期も API も異なるため、
+単発コマンドの繰り返しではなく最初から並行構成にする。
+
+| goroutine | 役割 |
+|---|---|
+| project-poller | Loop A。Status の差分検出 |
+| notification-poller | Loop B。コメント / レビューの起床シグナル |
+| tick-poller | `Verifying` の CI 確認と `In Progress` の lease 切れ検知 |
+| reconciler | 通知の取りこぼしの自己修復 |
+| dispatcher | イベントを受けて状態遷移とジョブ投入（短時間処理のみ） |
+| agent-worker | **エージェント起動を直列に処理する唯一の goroutine** |
+
+`In Progress` の直列性は agent-worker が 1 本であることで保証される。
+`Verifying` の CI 確認は dispatcher 内で完結し、エージェントを起動しないためパイプラインを占有しない。
+同一 item に対するジョブの二重投入は in-flight セットで防ぐ。
+
+### 7.1 クラッシュ復帰
+
+- 起動時に `In Progress` の item があれば、単一インスタンス前提により前回の残骸とみなし、
+  lease を切らせて `Blocked` へ送る。
+- 実行中の item に新しいコメントが来た場合は**カーソルを進めない**。
+  リコンサイルが再検出し、レーンが空いた時点で処理される。
+
+## 8. 残課題
+
+- **cross-reference の通知有無**: 子 Issue から親 Issue を参照した際に親へ通知が飛ぶかは未検証。
+  一旦「飛ばない」前提とする。飛ぶ場合でも親 Issue は Inbox で refine が走るだけなので致命的ではない。
+- **コスト上限**: 現状はタイムアウトのみで、トークン量による打ち切りは持っていない。
+- **複数インスタンス**: 単一インスタンス前提。起動時の孤児回収がこの前提に依存している。

@@ -1,0 +1,115 @@
+# nuage-autopilot
+
+GitHub Projects をステートマシンの単一の真実源として使う、自動開発パイプラインの常駐ワーカー。
+
+人間が関わるのは 3 点だけ。**曖昧な要求を Issue に書く / Ready に動かす / PR をレビューしてマージする。**
+要件精緻化・実装・テスト・セルフレビュー・検証は自律エージェントが行う。
+
+- 状態機械の定義（What）: [DESIGN.md](./DESIGN.md)
+- 実装アーキテクチャ（How）: [ARCHITECTURE.md](./ARCHITECTURE.md)
+
+## レーン
+
+```
+Inbox ──[人間がドラッグ]──> Ready ──> In Progress ──> Verifying ──> In Review ──> Done
+  ↑                                       ↑              │              │
+  │                                       └──────────────┘              │
+  └──────────────────────── Blocked <─────┴──────────────┘──────────────┘
+```
+
+人間が手動で Status を変えるのは **Inbox → Ready の 1 回だけ**。
+それ以外の復帰（レビュー指摘、Blocked の助言、仕様質問への回答）は、
+**コメントを書くだけ**でエージェントが起床し、自分で適切なレーンに移して自走する。
+
+## セットアップ
+
+### 1. GitHub 側
+
+- Projects v2 に単一選択の `Status` フィールドを作り、選択肢を 7 つ用意する
+  （`📥 Inbox` / `🎯 Ready` / `🚧 In Progress` / `🔍 Verifying` / `👀 In Review` / `⏸ Blocked` / `✅ Done`）
+- Project の **Auto-add workflow** を有効にする（Issue が自動でカード化される）
+- Project の組み込みワークフロー **「Item closed → Status: Done」** を有効にする
+- **classic PAT** を発行する。`repo` と **`project`** スコープが必要
+  （Actions の `GITHUB_TOKEN` では Project を操作できない）
+
+```sh
+export GH_TOKEN=ghp_xxxxxxxxxxxx
+```
+
+### 2. 設定
+
+```sh
+cp nuage.example.yaml nuage.yaml
+$EDITOR nuage.yaml   # project.owner / project.number / repos を書き換える
+```
+
+### 3. 検証と起動
+
+```sh
+go build -o nuage ./cmd/nuage
+
+./nuage doctor     # トークン・Project・Status 名・エージェント・clone を検証
+./nuage init       # コールドスタートのシード（現在を処理済みとして記録）
+./nuage run        # 常駐開始
+```
+
+`init` を省いても `run` が DB の空を検出して自動でシードする。
+**DB を消して作り直しても安全**で、過去のコメントを再生することはない。
+
+## 品質ゲート
+
+対象リポジトリに `.agents/autopilot-gate.md` を置くと、
+セルフレビュー（`Verifying`）のプロンプトにそのまま埋め込まれる。書式は自由。
+
+```markdown
+# 品質ゲート
+
+- `npm test` と `npm run lint` が通ること
+- Preview URL（PR にコメントされる）を開き、対象画面が表示されることを確認すること
+- DB マイグレーションを含む場合はロールバック手順を PR 本文に書くこと
+```
+
+## コマンド
+
+| コマンド | 役割 |
+|---|---|
+| `nuage run` | 常駐してパイプラインを回す |
+| `nuage init` | コールドスタートのシード |
+| `nuage status` | ローカル状態（Status / PR / ブランチ / リトライ回数）の一覧 |
+| `nuage doctor` | 設定と前提条件の検証 |
+
+共通フラグ: `-c, --config <path>`（既定 `nuage.yaml`）、`-v, --verbose`
+
+## エージェントの差し替え
+
+用途ごとに任意の CLI を指定できる。プロンプトは **stdin** で渡すため、引数仕様に依存しない。
+
+```yaml
+agents:
+  implement:
+    command: claude
+    args: ["-p", "--dangerously-skip-permissions"]
+  review:
+    command: some-other-agent
+    args: ["--print"]
+    timeout: 15m
+```
+
+エージェントは判断結果を出力の行頭マーカーで返す（`AUTOPILOT_ACTION` / `AUTOPILOT_VERDICT` / `AUTOPILOT_REASON`）。
+詳細は [ARCHITECTURE.md §4.6](./ARCHITECTURE.md)。
+
+## 設計上の約束
+
+- **エージェントは中身を書き、ワーカーは Status を動かす。** Issue 本文・コメント・PR の操作は
+  すべてエージェントが `gh` で行い、ワーカーは Project の Status と Blocked コメントだけを書く。
+- **DB はキャッシュ。** GitHub が常に真実源で、DB が持つのは差分検出用のスナップショット、
+  カーソル、リトライ回数だけ。
+- **In Progress は 1 件ずつ。** ただし CI 待ち（Verifying）はエージェントを持たないため並列に存在でき、
+  パイプラインを占有しない。
+
+## 開発
+
+```sh
+go test ./...
+go vet ./...
+```

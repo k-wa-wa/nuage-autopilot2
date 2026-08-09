@@ -1,0 +1,62 @@
+# nuage 設定ファイルの例。nuage.yaml にコピーして編集する。
+#
+# 認証は環境変数 GH_TOKEN（または GITHUB_TOKEN）から読む。
+# Projects v2 を操作するため、classic PAT の project スコープが必要。
+
+# 対象リポジトリの clone を置く場所と、状態キャッシュ DB の場所。
+workspace: ~/.nuage/workspaces
+database: ~/.nuage/nuage.db
+
+# 対象リポジトリ内の品質ゲート定義ファイル（存在すれば検証フェーズのプロンプトに含める）。
+gate_file: .agents/autopilot-gate.md
+
+project:
+  owner: k-wa-wa
+  number: 1
+  owner_type: user # user または organization
+  status_field: Status
+
+repos:
+  - owner: k-wa-wa
+    name: example-repo
+
+# Project の Status 選択肢名。ボード上の表示名と完全一致させる（絵文字を含む）。
+statuses:
+  inbox: "📥 Inbox"
+  ready: "🎯 Ready"
+  in_progress: "🚧 In Progress"
+  verifying: "🔍 Verifying"
+  in_review: "👀 In Review"
+  blocked: "⏸ Blocked"
+  done: "✅ Done"
+
+poll:
+  project_interval: 60s # Ready への移動を検知する（通知では拾えない）
+  notification_interval: 60s # X-Poll-Interval がこれより長ければそちらに従う
+  verify_interval: 60s # Verifying の CI 確認と In Progress のスタック検知
+  reconcile_interval: 10m # 通知の取りこぼしを自己修復する保険
+
+limits:
+  max_retries: 5 # Verifying → In Progress の往復上限。超えると Blocked
+  implement_timeout: 2h # 実装エージェント 1 回の上限
+  agent_timeout: 30m # その他フェーズのエージェント 1 回の上限
+  verify_wait_timeout: 1h # CI 完了待ちの上限。超えると Blocked
+  context_comments: 10 # プロンプトに含める直近コメント数
+
+# 用途ごとにエージェント CLI を差し替えられる。プロンプトは stdin で渡す。
+agents:
+  refine:
+    command: claude
+    args: ["-p", "--dangerously-skip-permissions"]
+  implement:
+    command: claude
+    args: ["-p", "--dangerously-skip-permissions"]
+  review:
+    command: claude
+    args: ["-p", "--dangerously-skip-permissions"]
+  triage:
+    command: claude
+    args: ["-p", "--dangerously-skip-permissions"]
+# 全エージェントに渡す追加の環境変数。
+# env:
+#   SOME_KEY: value
