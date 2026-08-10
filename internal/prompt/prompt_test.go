@@ -19,16 +19,12 @@ func sample() Context {
 		Comments: []gh.Comment{
 			{User: gh.User{Login: "k-wa-wa"}, Body: "OAuth も対応して", CreatedAt: time.Now()},
 		},
-		PRNumber:             34,
-		Gate:                 "1. `npm run e2e` が通ること",
-		GatePath:             ".agents/autopilot-gate.md",
-		MaxRetries:           5,
-		ProjectOwner:         "k-wa-wa",
-		ProjectNumber:        1,
-		ProjectID:            "PVT_kwDOA12345",
-		ProjectStatusFieldID: "PVTSSF_67890",
-		ProjectInboxOptionID: "opt_inbox123",
-		StatusInbox:          "📥 Inbox",
+		PRNumber:      34,
+		Gate:          "1. `npm run e2e` が通ること",
+		GatePath:      ".agents/autopilot-gate.md",
+		MaxRetries:    5,
+		ProjectOwner:  "k-wa-wa",
+		ProjectNumber: 1,
 	}
 }
 
@@ -61,29 +57,18 @@ func TestRefineAsksForMarker(t *testing.T) {
 	}
 }
 
-func TestRefineSplitsWithProjectAndInbox(t *testing.T) {
-	c := sample()
-	p := Refine(c)
-	for _, want := range []string{
-		"gh project item-add 1 --owner k-wa-wa",
-		"gh project item-edit",
-		"PVT_kwDOA12345",
-		"PVTSSF_67890",
-		"opt_inbox123",
-	} {
-		if !strings.Contains(p, want) {
-			t.Errorf("refine プロンプトに %q が含まれていません", want)
-		}
+// 分割時、エージェントに求めるのは Project への追加までで、Status は触らせない。
+// Status の設定はワーカーの責務（handleItemNew が空 Status の子 Issue を引き取る）。
+func TestRefineSplitsWithProjectAdd(t *testing.T) {
+	p := Refine(sample())
+	if !strings.Contains(p, "gh project item-add 1 --owner k-wa-wa") {
+		t.Errorf("refine プロンプトに Project 追加の手順が含まれていません:\n%s", p)
 	}
-
-	// Project ID などが未解決の場合のフォールバック
-	cFallback := sample()
-	cFallback.ProjectID = ""
-	cFallback.ProjectStatusFieldID = ""
-	cFallback.ProjectInboxOptionID = ""
-	pFallback := Refine(cFallback)
-	if !strings.Contains(pFallback, "gh project item-add 1 --owner k-wa-wa") || !strings.Contains(pFallback, "📥 Inbox") {
-		t.Errorf("フォールバック時の refine プロンプトが不正です:\n%s", pFallback)
+	// Status を書き換えさせる指示が復活していないこと。
+	for _, forbidden := range []string{"item-edit", "single-select-option-id", "--field-id"} {
+		if strings.Contains(p, forbidden) {
+			t.Errorf("refine プロンプトに Status 変更の手順 %q が含まれています", forbidden)
+		}
 	}
 }
 

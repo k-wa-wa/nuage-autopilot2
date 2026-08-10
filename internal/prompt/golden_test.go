@@ -37,27 +37,26 @@ func base() Context {
 			{User: gh.User{Login: "reviewer"}, Path: "internal/auth/session.go", OriginalLine: 7, Body: "命名を揃えて", CreatedAt: t2},
 			{User: gh.User{Login: "reviewer"}, Path: "README.md", Body: "行が特定できないコメント", CreatedAt: t2},
 		},
-		NewInputs:            []string{"@k-wa-wa:\nモックしてよい", " 追加の指示 "},
-		PRNumber:             34,
-		Gate:                 "\n1. `npm run e2e` が通ること\n2. lint が通ること\n",
-		GatePath:             ".agents/autopilot-gate.md",
-		RetryCount:           2,
-		MaxRetries:           5,
-		CIHint:               "テストが 3 件落ちています",
-		ProjectOwner:         "k-wa-wa",
-		ProjectNumber:        1,
-		ProjectID:            "PVT_kwDOA12345",
-		ProjectStatusFieldID: "PVTSSF_67890",
-		ProjectInboxOptionID: "opt_inbox123",
-		StatusInbox:          "📥 Inbox",
+		NewInputs:     []string{"@k-wa-wa:\nモックしてよい", " 追加の指示 "},
+		PRNumber:      34,
+		Gate:          "\n1. `npm run e2e` が通ること\n2. lint が通ること\n",
+		GatePath:      ".agents/autopilot-gate.md",
+		RetryCount:    2,
+		MaxRetries:    5,
+		CIHint:        "テストが 3 件落ちています",
+		ProjectOwner:  "k-wa-wa",
+		ProjectNumber: 1,
 	}
 }
 
 // minimal は任意項目をすべて落とした Context。
+// Project は config で必須なので、ここでも常に埋まっている前提にする。
 func minimal() Context {
 	return Context{
-		Repo:  "k-wa-wa/example",
-		Issue: &gh.Issue{Number: 12, Title: "ログイン画面がほしい"},
+		Repo:          "k-wa-wa/example",
+		Issue:         &gh.Issue{Number: 12, Title: "ログイン画面がほしい"},
+		ProjectOwner:  "k-wa-wa",
+		ProjectNumber: 1,
 	}
 }
 
@@ -70,25 +69,6 @@ func withIssueBody(c Context, body string) Context {
 
 // goldenCases は生成される全プロンプトの分岐を網羅する。
 func goldenCases() map[string]func() string {
-	// refine: Project の ID 群が揃っている場合。
-	refineFull := base()
-
-	// refine: Project は分かるが ID 群が未解決の場合（フォールバック）。
-	refineNoIDs := base()
-	refineNoIDs.ProjectID = ""
-	refineNoIDs.ProjectStatusFieldID = ""
-	refineNoIDs.ProjectInboxOptionID = ""
-
-	// refine: Project 自体が未設定 + StatusInbox も未設定（既定の "Inbox"）。
-	refineNoProject := base()
-	refineNoProject.ProjectOwner = ""
-	refineNoProject.ProjectNumber = 0
-	refineNoProject.StatusInbox = ""
-
-	// refine: Project 番号だけ 0（owner はある）。
-	refineZeroNumber := base()
-	refineZeroNumber.ProjectNumber = 0
-
 	// implement: CI ヒント無し。
 	implementNoHint := base()
 	implementNoHint.CIHint = ""
@@ -98,23 +78,20 @@ func goldenCases() map[string]func() string {
 	reviewBlankGate.Gate = "   \n  "
 
 	return map[string]func() string{
-		"refine_full":             func() string { return Refine(refineFull) },
-		"refine_no_project_ids":   func() string { return Refine(refineNoIDs) },
-		"refine_no_project":       func() string { return Refine(refineNoProject) },
-		"refine_zero_project_num": func() string { return Refine(refineZeroNumber) },
-		"refine_minimal":          func() string { return Refine(minimal()) },
-		"refine_empty_body":       func() string { return Refine(withIssueBody(base(), "   ")) },
-		"implement_full":          func() string { return Implement(base()) },
-		"implement_no_ci_hint":    func() string { return Implement(implementNoHint) },
-		"implement_minimal":       func() string { return Implement(minimal()) },
-		"review_full":             func() string { return Review(base()) },
-		"review_blank_gate":       func() string { return Review(reviewBlankGate) },
-		"review_minimal":          func() string { return Review(minimal()) },
-		"triage_review_full":      func() string { return Triage(base(), TriageReview) },
-		"triage_review_minimal":   func() string { return Triage(minimal(), TriageReview) },
-		"triage_blocked_full":     func() string { return Triage(base(), TriageBlocked) },
-		"triage_blocked_minimal":  func() string { return Triage(minimal(), TriageBlocked) },
-		"triage_unknown_mode":     func() string { return Triage(base(), TriageMode(99)) },
+		"refine_full":            func() string { return Refine(base()) },
+		"refine_minimal":         func() string { return Refine(minimal()) },
+		"refine_empty_body":      func() string { return Refine(withIssueBody(base(), "   ")) },
+		"implement_full":         func() string { return Implement(base()) },
+		"implement_no_ci_hint":   func() string { return Implement(implementNoHint) },
+		"implement_minimal":      func() string { return Implement(minimal()) },
+		"review_full":            func() string { return Review(base()) },
+		"review_blank_gate":      func() string { return Review(reviewBlankGate) },
+		"review_minimal":         func() string { return Review(minimal()) },
+		"triage_review_full":     func() string { return Triage(base(), TriageReview) },
+		"triage_review_minimal":  func() string { return Triage(minimal(), TriageReview) },
+		"triage_blocked_full":    func() string { return Triage(base(), TriageBlocked) },
+		"triage_blocked_minimal": func() string { return Triage(minimal(), TriageBlocked) },
+		"triage_unknown_mode":    func() string { return Triage(base(), TriageMode(99)) },
 	}
 }
 
