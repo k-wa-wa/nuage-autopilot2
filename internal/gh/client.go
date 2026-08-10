@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -31,6 +32,27 @@ type Client struct {
 	graphqlURL string
 }
 
+// newTransport は長期稼働する常駐プロセス向けの HTTP Transport を構築する。
+//
+// NAT ルーター等のアイドル切断で TCP コネクションがブラックホール化した場合に
+// 備えて、ポーリング間隔（60s）より短い IdleConnTimeout と ResponseHeaderTimeout を設定する。
+// また、KeepAlive を短くして接続の健全性を保つ。
+func newTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 15 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		MaxIdleConnsPerHost:   5,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
 // New はトークンを環境変数（GH_TOKEN / GITHUB_TOKEN）から取得してクライアントを作る。
 func New() (*Client, error) {
 	token := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN"))
@@ -39,18 +61,54 @@ func New() (*Client, error) {
 	}
 	return &Client{
 		token: token,
-		http:  &http.Client{Timeout: 60 * time.Second},
+		http: &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: newTransport(),
+		},
 	}, nil
 }
 
 // NewForTest はエンドポイントを差し替えた Client を作る。テストからのみ使う。
 func NewForTest(token, baseURL, gqlURL string) *Client {
 	return &Client{
-		token:      token,
-		http:       &http.Client{Timeout: 10 * time.Second},
+		token: token,
+		http: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: newTransport(),
+		},
 		baseURL:    baseURL,
 		graphqlURL: gqlURL,
 	}
+}
+
+// do は HTTP リクエストを実行する。
+//
+// 通信エラーやタイムアウトが発生した際は、ゾンビ化した TCP コネクションが
+// プールに残らないよう CloseIdleConnections を呼び出す。
+// また、ctx がまだ有効である場合は、新規接続で 1 回だけ透過的にリトライする。
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	resp, err := c.http.Do(req)
+	if err != nil {
+		c.http.CloseIdleConnections()
+		if req.Context().Err() == nil && (req.Body == nil || req.GetBody != nil) {
+			retryReq := req.Clone(req.Context())
+			if req.GetBody != nil {
+				body, bodyErr := req.GetBody()
+				if bodyErr != nil {
+					return nil, err
+				}
+				retryReq.Body = body
+			}
+			resp, err = c.http.Do(retryReq)
+			if err != nil {
+				c.http.CloseIdleConnections()
+				return nil, err
+			}
+			return resp, nil
+		}
+		return nil, err
+	}
+	return resp, nil
 }
 
 func (c *Client) restBaseURL() string {
@@ -115,7 +173,7 @@ func (c *Client) restWithHeader(ctx context.Context, method, path string, body a
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +214,7 @@ func (c *Client) graphql(ctx context.Context, query string, vars map[string]any,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return err
 	}
