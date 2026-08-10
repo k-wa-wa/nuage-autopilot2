@@ -39,7 +39,7 @@ func TestAllPromptsForbidStatusChanges(t *testing.T) {
 		"triage-blocked": Triage(c, TriageBlocked),
 	}
 	for name, p := range prompts {
-		if !strings.Contains(p, "Status フィールドは絶対に変更しないでください") {
+		if !strings.Contains(p, "Status フィールドは絶対に変更しないこと") {
 			t.Errorf("%s: Status 変更の禁止が含まれていません", name)
 		}
 		if !strings.Contains(p, "#12") {
