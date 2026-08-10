@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -118,5 +119,117 @@ func TestRuns(t *testing.T) {
 	}
 	if err := s.EndRun(id, "ok"); err != nil {
 		t.Fatalf("EndRun に失敗: %v", err)
+	}
+}
+
+func TestRunHistory(t *testing.T) {
+	s := openTemp(t)
+
+	// 同じ Issue で 2 回、別の Issue で 1 回。
+	first, _ := s.StartRun("o/r", 1, "implement")
+	if err := s.SetRunLog(first, "/logs/a.log"); err != nil {
+		t.Fatalf("SetRunLog に失敗: %v", err)
+	}
+	if err := s.EndRun(first, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := s.StartRun("o/r", 1, "review")
+	other, _ := s.StartRun("o/r", 2, "refine")
+	if err := s.EndRun(other, "error: 失敗した"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetRun(first)
+	if err != nil || got == nil {
+		t.Fatalf("GetRun に失敗: %v (got=%v)", err, got)
+	}
+	if got.LogPath != "/logs/a.log" || got.Result != "ok" || got.Phase != "implement" {
+		t.Errorf("往復で値が壊れています: %+v", got)
+	}
+	if got.StartedAt.IsZero() || got.EndedAt.IsZero() {
+		t.Errorf("時刻が入っていません: %+v", got)
+	}
+
+	missing, err := s.GetRun(9999)
+	if err != nil || missing != nil {
+		t.Errorf("存在しない run が返りました: %v %v", missing, err)
+	}
+
+	// 実行中の行は ended_at がゼロ値のまま。
+	running, _ := s.GetRun(second)
+	if !running.EndedAt.IsZero() {
+		t.Errorf("未終了の run に終了時刻が入っています: %v", running.EndedAt)
+	}
+
+	runs, err := s.ListRuns("o/r", 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || runs[0].ID != second {
+		t.Fatalf("Issue の履歴が新しい順になっていません: %+v", runs)
+	}
+
+	// limit が効くこと。
+	runs, _ = s.ListRuns("o/r", 1, 1)
+	if len(runs) != 1 {
+		t.Errorf("limit が効いていません: %d 件", len(runs))
+	}
+
+	latest, err := s.LatestRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest) != 2 {
+		t.Fatalf("Issue ごとに 1 件になっていません: %+v", latest)
+	}
+	for _, r := range latest {
+		if r.IssueNumber == 1 && r.ID != second {
+			t.Errorf("Issue 1 の最新が古い方です: %+v", r)
+		}
+	}
+}
+
+// log_path を持たない旧 DB を開いても、履歴を捨てずに列だけが足されること。
+func TestMigrationAddsLogPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE runs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo TEXT NOT NULL, issue_number INTEGER NOT NULL, phase TEXT NOT NULL,
+		started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL DEFAULT 0,
+		result TEXT NOT NULL DEFAULT ''
+	);
+	INSERT INTO runs (repo, issue_number, phase, started_at, ended_at, result)
+	VALUES ('o/r', 5, 'implement', 100, 200, 'ok');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("旧スキーマの DB を開けません: %v", err)
+	}
+	defer s.Close()
+
+	runs, err := s.ListRuns("o/r", 5, 10)
+	if err != nil {
+		t.Fatalf("移行後に読めません: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Phase != "implement" || runs[0].LogPath != "" {
+		t.Errorf("既存の履歴が保たれていません: %+v", runs)
+	}
+
+	// 追加された列に書けること。
+	if err := s.SetRunLog(runs[0].ID, "/logs/x.log"); err != nil {
+		t.Fatalf("移行後に log_path を書けません: %v", err)
+	}
+	got, _ := s.GetRun(runs[0].ID)
+	if got.LogPath != "/logs/x.log" {
+		t.Errorf("log_path = %q", got.LogPath)
 	}
 }

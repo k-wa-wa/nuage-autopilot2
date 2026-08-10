@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,30 @@ type Config struct {
 	Limits   Limits            `yaml:"limits"`
 	Agents   map[string]Agent  `yaml:"agents"`
 	Env      map[string]string `yaml:"env"`
+	Web      Web               `yaml:"web"`
+}
+
+// Web は状態を参照するための HTTP サーバの設定。
+//
+// 参照専用で認証を持たないため、既定はループバックに閉じる。
+// 外から見たい場合はトンネル越しにするか、前段で守ること。
+type Web struct {
+	// Addr は待ち受けアドレス。
+	//
+	// 未指定と「明示的に空文字」を区別する必要があるためポインタにしている。
+	// 未指定なら DefaultWebAddr、空文字なら起動しない。
+	Addr *string `yaml:"addr"`
+}
+
+// DefaultWebAddr は web.addr 未指定時の待ち受けアドレス。
+const DefaultWebAddr = "127.0.0.1:8787"
+
+// Listen は実際に待ち受けるアドレスを返す。空文字なら起動しない。
+func (w Web) Listen() string {
+	if w.Addr == nil {
+		return DefaultWebAddr
+	}
+	return *w.Addr
 }
 
 // Project は監視対象の GitHub Projects v2。
@@ -211,6 +236,12 @@ func (c *Config) validate() error {
 	for _, r := range c.Repos {
 		if r.Owner == "" || r.Name == "" {
 			return fmt.Errorf("repos の要素に owner/name が不足")
+		}
+	}
+	// 待ち受けに失敗するのは常駐開始後なので、書式は起動前に弾く。
+	if addr := c.Web.Listen(); addr != "" {
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			return fmt.Errorf("web.addr は host:port の形式で指定してください: %w", err)
 		}
 	}
 	// 用途キーの打ち間違いは黙って無視されるため、起動時に弾く。

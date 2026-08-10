@@ -635,6 +635,10 @@ func (e *Engine) runJob(ctx context.Context, j Job) {
 	if err != nil {
 		e.log.Error("実行ログの記録に失敗", "err", err)
 	}
+	// 参照 UI 向けの記録。パイプラインの判断には影響しない（web.go を参照）。
+	e.beginActive(j, runID)
+	defer e.endActive()
+
 	result, err := e.execute(ctx, j, it)
 	outcome := "ok"
 	if err != nil {

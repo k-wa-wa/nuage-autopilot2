@@ -26,12 +26,31 @@ type Runner struct {
 	logDir string
 	// BaseEnv は全エージェントに渡す環境変数（os.Environ() ベース）。
 	BaseEnv []string
+	// OnStart はエージェントプロセスの起動直前に呼ばれる。nil なら何もしない。
+	//
+	// 実行中のプロンプトを参照 UI から読めるようにするためのフック。
+	// 起動を待たせないよう、実装は即座に返ること。
+	OnStart func(RunInfo)
+}
+
+// RunInfo は起動しようとしているエージェントプロセスの情報。
+type RunInfo struct {
+	Phase string
+	// LogPath は出力先のログファイル。ログを取れない場合は空。
+	//
+	// このパスは openLog を呼ぶまで決まらないため、実行を開始した側は
+	// このフックを経由しないと実行中のログに辿り着けない。
+	LogPath   string
+	StartedAt time.Time
 }
 
 // New は Runner を作る。
 func New(logDir string, baseEnv []string) *Runner {
 	return &Runner{logDir: logDir, BaseEnv: baseEnv}
 }
+
+// LogDir はログの出力先ディレクトリを返す。ログ無効なら空。
+func (r *Runner) LogDir() string { return r.logDir }
 
 // Result はエージェント実行の結果。
 type Result struct {
@@ -115,11 +134,27 @@ func (r *Runner) Run(ctx context.Context, s Spec, phase, workDir, prompt string)
 	if logFile != nil {
 		defer logFile.Close()
 		// プロンプトは別途まとめて出すため、引数側では伏せる。
-		fmt.Fprintf(logFile, "=== phase=%s adapter=%s cmd=%s %s dir=%s at=%s ===\n--- prompt ---\n%s\n--- output ---\n",
+		fmt.Fprintf(logFile, "=== phase=%s adapter=%s cmd=%s %s dir=%s at=%s ===\n%s\n%s\n%s\n",
 			phase, adapter.Name(), command, strings.Join(inv.DisplayArgs(), " "),
-			workDir, time.Now().Format(time.RFC3339), prompt)
+			workDir, time.Now().Format(time.RFC3339), LogPromptSep, prompt, LogOutputSep)
 	}
 
+	// ヘッダとプロンプトを書き終えてから通知する。参照側が読んだ時点で
+	// 少なくともプロンプトは揃っていることを保証するため。
+	if r.OnStart != nil {
+		r.OnStart(RunInfo{Phase: phase, LogPath: logPath, StartedAt: time.Now()})
+	}
+
+	// ログへの書き込みはバッファを挟まないが、それでも出力が逐次現れるとは限らない。
+	//
+	// claude と agy はいずれも print / 非対話モードでは、完了の瞬間まで標準出力に
+	// 1 バイトも書かない（ツール実行の途中経過も出ない）。実測で確認済みである。
+	// したがって実行中のログはヘッダとプロンプトだけで、出力は終了時に一括で現れる。
+	//
+	// 逐次表示が要る場合は --output-format stream-json を使うことになるが、
+	// そうするとマーカー行が JSON 文字列の中に入り、parseMarkers の行頭一致から
+	// 外れて判断機構が壊れる。切り替えるなら、ここで JSON を受けて従来と同じ
+	// text に再構成し、Result.Stdout の中身を変えないようにする必要がある。
 	var stdout, stderr bytes.Buffer
 	if logFile != nil {
 		cmd.Stdout = io.MultiWriter(&stdout, logFile)

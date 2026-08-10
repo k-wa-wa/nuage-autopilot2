@@ -228,6 +228,12 @@ func cmdDoctor(ctx context.Context, cfg *config.Config, log *slog.Logger) error 
 	// ワークスペースは下のリポジトリ同期で検証する。
 	fmt.Printf("… ワークスペース: %s\n", cfg.Workspace)
 
+	if addr := cfg.Web.Listen(); addr != "" {
+		fmt.Printf("✓ 参照 UI: http://%s（参照専用）\n", addr)
+	} else {
+		fmt.Printf("… 参照 UI: 無効（web.addr が空）\n")
+	}
+
 	for _, use := range config.AgentUses {
 		spec := cfg.AgentFor(use).Spec()
 		command := spec.ResolvedCommand()

@@ -86,6 +86,8 @@ type Engine struct {
 
 	mu       sync.Mutex
 	inflight map[string]bool
+	// active は参照 UI 向けに、今処理しているジョブを保持する（web.go を参照）。
+	active *activeRun
 }
 
 // New は Engine を組み立てる。GitHub への接続と Project メタ情報の解決まで行う。
@@ -136,6 +138,8 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Engine, er
 		jobs:     make(chan Job, 256),
 		inflight: map[string]bool{},
 	}
+	// 参照 UI が実行中のプロンプトを読めるよう、ログのパスを受け取る。
+	e.runner.OnStart = e.onAgentStart
 	return e, nil
 }
 
@@ -251,6 +255,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	start("reconciler", e.reconcile)
 	start("dispatcher", e.dispatch)
 	start("agent-worker", e.workAgents)
+	start("web", e.serveWeb)
 
 	e.log.Info("ワーカーを起動しました",
 		"project", fmt.Sprintf("%s/%d", e.cfg.Project.Owner, e.cfg.Project.Number),

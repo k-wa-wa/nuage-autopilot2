@@ -36,6 +36,22 @@ type Item struct {
 	UpdatedAt     time.Time
 }
 
+// Run は 1 回のエージェント実行の記録。
+//
+// EndedAt がゼロ値なら実行中か、ワーカーが異常終了して取り残されたかのどちらか。
+// 参照側はこの 2 つを区別できないため、実行中かどうかは常駐プロセスの
+// メモリ上の情報で判断する。
+type Run struct {
+	ID          int64
+	Repo        string
+	IssueNumber int
+	Phase       string
+	StartedAt   time.Time
+	EndedAt     time.Time
+	Result      string
+	LogPath     string
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS items (
   repo             TEXT    NOT NULL,
@@ -65,7 +81,8 @@ CREATE TABLE IF NOT EXISTS runs (
   phase        TEXT    NOT NULL,
   started_at   INTEGER NOT NULL,
   ended_at     INTEGER NOT NULL DEFAULT 0,
-  result       TEXT    NOT NULL DEFAULT ''
+  result       TEXT    NOT NULL DEFAULT '',
+  log_path     TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_item ON runs(repo, issue_number);
@@ -89,7 +106,47 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("スキーマ適用に失敗: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// migrate は CREATE TABLE IF NOT EXISTS では追随できない列追加を補う。
+//
+// 既存の DB は runs に log_path を持たないが、この DB はキャッシュなので
+// 作り直しても復旧できる。とはいえ実行履歴まで捨てる必要はないため、
+// 不足している列だけを足す。
+func migrate(db *sql.DB) error {
+	has, err := hasColumn(db, "runs", "log_path")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE runs ADD COLUMN log_path TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("runs.log_path の追加に失敗: %w", err)
+		}
+	}
+	return nil
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
 }
 
 // Close は DB を閉じる。
@@ -210,6 +267,72 @@ func (s *Store) EndRun(id int64, result string) error {
 	_, err := s.db.Exec(`UPDATE runs SET ended_at = ?, result = ? WHERE id = ?`,
 		time.Now().Unix(), result, id)
 	return err
+}
+
+// SetRunLog は実行ログにエージェントの出力ファイルのパスを記録する。
+//
+// パスはエージェントプロセスの起動時に初めて確定するため、StartRun では埋められない。
+func (s *Store) SetRunLog(id int64, path string) error {
+	_, err := s.db.Exec(`UPDATE runs SET log_path = ? WHERE id = ?`, path, id)
+	return err
+}
+
+const runColumns = `id, repo, issue_number, phase, started_at, ended_at, result, log_path`
+
+// GetRun は 1 件取得する。存在しない場合は (nil, nil)。
+func (s *Store) GetRun(id int64) (*Run, error) {
+	row := s.db.QueryRow(`SELECT `+runColumns+` FROM runs WHERE id = ?`, id)
+	r, err := scanRun(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return r, err
+}
+
+// ListRuns は 1 件の Issue の実行履歴を新しい順に返す。
+func (s *Store) ListRuns(repo string, issue int, limit int) ([]*Run, error) {
+	return s.queryRuns(`SELECT `+runColumns+` FROM runs
+		WHERE repo = ? AND issue_number = ?
+		ORDER BY started_at DESC, id DESC LIMIT ?`, repo, issue, limit)
+}
+
+// LatestRuns は Issue ごとの最新の実行を 1 件ずつ返す。
+//
+// 一覧画面で「この Issue で最後に何が起きたか」を出すために使う。
+// 直近 N 件を取って絞る方式だと、しばらく動いていない Issue が窓から
+// 溢れて欠落するため、Issue ごとに最大 id を引く。
+func (s *Store) LatestRuns() ([]*Run, error) {
+	return s.queryRuns(`SELECT ` + runColumns + ` FROM runs
+		WHERE id IN (SELECT MAX(id) FROM runs GROUP BY repo, issue_number)`)
+}
+
+func (s *Store) queryRuns(query string, args ...any) ([]*Run, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func scanRun(r scanner) (*Run, error) {
+	var run Run
+	var started, ended int64
+	if err := r.Scan(&run.ID, &run.Repo, &run.IssueNumber, &run.Phase,
+		&started, &ended, &run.Result, &run.LogPath); err != nil {
+		return nil, err
+	}
+	run.StartedAt = timeOrZero(started)
+	run.EndedAt = timeOrZero(ended)
+	return &run, nil
 }
 
 type scanner interface {
