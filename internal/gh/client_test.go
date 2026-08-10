@@ -34,17 +34,7 @@ func TestClientDoRetryOnNetworkError(t *testing.T) {
 		count := atomic.AddInt32(&attempts, 1)
 		if count == 1 {
 			// 1 回目は接続を強制切断してネットワークエラーを模倣する。
-			hj, ok := w.(http.Hijacker)
-			if !ok {
-				http.Error(w, "hijack not supported", http.StatusInternalServerError)
-				return
-			}
-			conn, _, err := hj.Hijack()
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			conn.Close()
+			killConn(t, w)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -70,20 +60,15 @@ func TestClientDoRetryOnNetworkError(t *testing.T) {
 	}
 }
 
-// TestClientDoWithBodyRetry は POST リクエスト（ボディ付き）でも安全にリトライできることを確認する。
-func TestClientDoWithBodyRetry(t *testing.T) {
+// TestClientDoRetriesGraphQLQuery は GraphQL の読み取り（ボディ付き POST）が
+// 再送されることを確認する。Project のポーリングはこの経路を通る。
+func TestClientDoRetriesGraphQLQuery(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count := atomic.AddInt32(&attempts, 1)
 		_, _ = io.ReadAll(r.Body)
 		if count == 1 {
-			hj, ok := w.(http.Hijacker)
-			if !ok {
-				http.Error(w, "hijack not supported", http.StatusInternalServerError)
-				return
-			}
-			conn, _, _ := hj.Hijack()
-			conn.Close()
+			killConn(t, w)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -99,7 +84,7 @@ func TestClientDoWithBodyRetry(t *testing.T) {
 	var out struct {
 		Echo string `json:"echo"`
 	}
-	if err := client.graphql(ctx, "test-query", map[string]any{"key": "value"}, &out); err != nil {
+	if err := client.graphql(ctx, "query($id: ID!) { node(id: $id) { id } }", map[string]any{"id": "x"}, &out); err != nil {
 		t.Fatalf("graphql failed: %v", err)
 	}
 
@@ -111,14 +96,100 @@ func TestClientDoWithBodyRetry(t *testing.T) {
 	}
 }
 
+// TestClientDoDoesNotRetryGraphQLMutation は書き込みを再送しないことを確認する。
+//
+// サーバが処理を終えてから応答を落とした場合、再送は Status の二重更新や
+// フィールドの二重作成になる。通信エラーはそのまま呼び出し側へ返す。
+func TestClientDoDoesNotRetryGraphQLMutation(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		_, _ = io.ReadAll(r.Body)
+		killConn(t, w)
+	}))
+	defer server.Close()
+
+	client := NewForTest("dummy-token", server.URL, server.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.graphql(ctx, setStatusMutation, map[string]any{"item": "x"}, nil)
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1（mutation は再送しない）", got)
+	}
+}
+
+// TestClientDoDoesNotRetryRESTPost はコメント投稿のような REST の書き込みを
+// 再送しないことを確認する。再送するとコメントが二重に投稿されうる。
+func TestClientDoDoesNotRetryRESTPost(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		_, _ = io.ReadAll(r.Body)
+		killConn(t, w)
+	}))
+	defer server.Close()
+
+	client := NewForTest("dummy-token", server.URL, server.URL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.AddComment(ctx, "owner/repo", 1, "本文")
+	if err == nil {
+		t.Fatal("want error, got nil")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1（POST は再送しない）", got)
+	}
+}
+
+func TestIsGraphQLMutation(t *testing.T) {
+	tests := []struct {
+		op   string
+		want bool
+	}{
+		{setStatusMutation, true},
+		{"mutation($id: ID!) { x }", true},
+		{"\n  mutation { x }", true},
+		{"query($id: ID!) { node(id: $id) { id } }", false},
+		// キーワードを省略した短縮形は常に query。
+		{"{ viewer { login } }", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isGraphQLMutation(tt.op); got != tt.want {
+			t.Errorf("isGraphQLMutation(%.30q) = %v, want %v", tt.op, got, tt.want)
+		}
+	}
+}
+
+// killConn は応答を返さずに接続を切り、通信エラーを模倣する。
+func killConn(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "hijack not supported", http.StatusInternalServerError)
+		return
+	}
+	conn, _, err := hj.Hijack()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	conn.Close()
+}
+
 // TestClientDoContextCanceled はコンテキストがキャンセルされている場合はリトライしないことを確認する。
 func TestClientDoContextCanceled(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&attempts, 1)
-		hj, _ := w.(http.Hijacker)
-		conn, _, _ := hj.Hijack()
-		conn.Close()
+		killConn(t, w)
 	}))
 	defer server.Close()
 

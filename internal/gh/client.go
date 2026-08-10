@@ -85,30 +85,58 @@ func NewForTest(token, baseURL, gqlURL string) *Client {
 //
 // 通信エラーやタイムアウトが発生した際は、ゾンビ化した TCP コネクションが
 // プールに残らないよう CloseIdleConnections を呼び出す。
-// また、ctx がまだ有効である場合は、新規接続で 1 回だけ透過的にリトライする。
-func (c *Client) do(req *http.Request) (*http.Response, error) {
+// そのうえで retriable が真の場合に限り、新規接続で 1 回だけ透過的に再送する。
+//
+// **副作用を持つリクエストは再送しない。** 通信エラーからは「リクエストが届かなかった」
+// のか「サーバは処理を終えたが応答だけを取りこぼした」のかを区別できないため、
+// 再送は前者を救う代わりに後者を二重実行に変えてしまう。コメントの二重投稿や
+// Project フィールドの二重作成は人間から見える形で壊れるのに対し、取りこぼしは
+// 次のポーリング周回が拾い直す。再送しない方が安全側に倒れる。
+func (c *Client) do(req *http.Request, retriable bool) (*http.Response, error) {
 	resp, err := c.http.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	c.http.CloseIdleConnections()
+	if !retriable || req.Context().Err() != nil {
+		return nil, err
+	}
+	retryReq := req.Clone(req.Context())
+	if req.Body != nil {
+		// ボディは 1 回目で読み切られているので作り直す。作り直せないなら諦める。
+		if req.GetBody == nil {
+			return nil, err
+		}
+		body, bodyErr := req.GetBody()
+		if bodyErr != nil {
+			return nil, err
+		}
+		retryReq.Body = body
+	}
+	resp, err = c.http.Do(retryReq)
 	if err != nil {
 		c.http.CloseIdleConnections()
-		if req.Context().Err() == nil && (req.Body == nil || req.GetBody != nil) {
-			retryReq := req.Clone(req.Context())
-			if req.GetBody != nil {
-				body, bodyErr := req.GetBody()
-				if bodyErr != nil {
-					return nil, err
-				}
-				retryReq.Body = body
-			}
-			resp, err = c.http.Do(retryReq)
-			if err != nil {
-				c.http.CloseIdleConnections()
-				return nil, err
-			}
-			return resp, nil
-		}
 		return nil, err
 	}
 	return resp, nil
+}
+
+// isRetriableMethod は再送しても副作用が増えない HTTP メソッドかを返す。
+func isRetriableMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead:
+		return true
+	}
+	return false
+}
+
+// isGraphQLMutation は GraphQL の操作が書き込みかどうかを返す。
+//
+// GraphQL では書き込みは必ず mutation キーワードで始まる（キーワードを省略した
+// `{ ... }` の短縮形は常に query）。したがって先頭語だけで判別でき、呼び出し側が
+// フラグを渡し忘れて mutation を再送対象にしてしまう事故が起きない。
+func isGraphQLMutation(op string) bool {
+	return strings.HasPrefix(strings.TrimLeft(op, " \t\r\n"), "mutation")
 }
 
 func (c *Client) restBaseURL() string {
@@ -173,7 +201,7 @@ func (c *Client) restWithHeader(ctx context.Context, method, path string, body a
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.do(req)
+	resp, err := c.do(req, isRetriableMethod(method))
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +242,8 @@ func (c *Client) graphql(ctx context.Context, query string, vars map[string]any,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 
-	resp, err := c.do(req)
+	// GraphQL は読み書きとも POST なので、メソッドではなく操作の種類で判断する。
+	resp, err := c.do(req, !isGraphQLMutation(query))
 	if err != nil {
 		return err
 	}
