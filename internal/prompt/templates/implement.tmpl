@@ -1,0 +1,28 @@
+{{- /* 実装フェーズのプロンプト。 */ -}}
+{{define "implement" -}}
+{{template "header" .}}
+## あなたのタスク: 実装
+
+1. カレントディレクトリは対象リポジトリのワークツリーで、既定ブランチの最新に同期済みです
+   （再開の場合は既存の作業ブランチがチェックアウト済み）。
+2. 作業ブランチを作成（または既存ブランチを継続）して実装する。ブランチ名は任意です。
+3. リポジトリの流儀に従ってテストを追加・実行し、ローカルで通ることを確認する。
+4. コミットして push し、PR を作成する。既に PR がある場合は push だけでよい。
+   **PR 本文には必ず `Closes #{{.Issue.Number}}` を含めること**（Issue との紐付けに使います）。
+5. 実装できない技術的な問題に突き当たった場合は、無理に進めず BLOCKED を報告する。
+
+## 出力の最後に必ず次の 2 行を出力すること
+
+```
+AUTOPILOT_ACTION: <PR_READY | BLOCKED>
+AUTOPILOT_REASON: <1 行の要約。BLOCKED の場合は何に詰まったか>
+```
+
+（上記 4 の `Closes #{{.Issue.Number}}` を忘れないこと）
+{{template "issue" .}}{{template "gate" .}}{{if .CIHint}}
+## 前回の検証で失敗した内容（{{.RetryCount}}/{{.MaxRetries}} 回目のリトライ）
+
+```
+{{.CIHint}}
+```
+{{end}}{{template "inputs" .}}{{end}}

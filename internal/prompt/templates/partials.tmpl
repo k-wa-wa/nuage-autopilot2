@@ -1,0 +1,47 @@
+{{- /*
+partials.tmpl は各プロンプトが共有する断片を定義する。
+本文の末尾に付ける節（Issue・行コメント・人間の発言・品質ゲート）は
+内容が無ければ節ごと出力しない。
+*/ -}}
+
+{{- define "header" -}}
+あなたは自動開発パイプラインで動作する自律エージェントです。
+GitHub への書き込み（Issue 本文の更新・コメント投稿・PR 作成）は gh コマンドで自分で行ってください。
+ただし **GitHub Projects の Status フィールドは絶対に変更しないでください**（分割時に新規起票した子 Issue の初期 Status を Inbox に設定する場合を除く）。Status はワーカーが管理します。
+
+対象リポジトリ: {{.Repo}}
+対象 Issue: #{{.Issue.Number}} {{.Issue.Title}}
+{{end -}}
+
+{{- define "issue"}}
+---
+
+## Issue #{{.Issue.Number}}: {{.Issue.Title}}
+
+{{issueBody .Issue}}
+{{if .Comments}}
+## 直近のコメント（古い順、最大 {{len .Comments}} 件）
+{{range .Comments}}
+### @{{.User.Login}} ({{ts .CreatedAt}})
+{{trim .Body}}
+{{end}}{{end}}{{template "reviewComments" .}}{{end -}}
+
+{{- define "reviewComments"}}{{if .ReviewComments}}
+## PR #{{.PRNumber}} の行コメント（古い順、最大 {{len .ReviewComments}} 件）
+{{range .ReviewComments}}
+### @{{.User.Login}} `{{.Location}}` ({{ts .CreatedAt}})
+{{trim .Body}}
+{{end}}{{end}}{{end -}}
+
+{{- define "inputs"}}{{if .NewInputs}}
+## 今回あなたを起動した人間の発言
+{{range .NewInputs}}
+---
+{{trim .}}
+{{end}}{{end}}{{end -}}
+
+{{- define "gate"}}{{if trim .Gate}}
+## 品質ゲート定義（{{.GatePath}}）
+
+{{trim .Gate}}
+{{end}}{{end -}}
