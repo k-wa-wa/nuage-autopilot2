@@ -92,8 +92,12 @@ items(
 
 cursors(name TEXT PRIMARY KEY, value TEXT)  -- notifications since 等
 
-runs(id, issue_number, phase, started_at, ended_at, result)  -- 実行ログ
+runs(id, issue_number, phase, started_at, ended_at, result, log_path)  -- 実行ログ
 ```
+
+`log_path` はエージェントの出力ファイルの位置で、参照 UI（§8）が実行後に
+プロンプトと出力を辿るために使う。パスはプロセス起動時に初めて確定するため、
+`started_at` の記録とは別のタイミングで書き込まれる。
 
 ### 2.3 コールドスタート規約
 
@@ -246,6 +250,7 @@ diff のインラインコメントを問わず、すべて行動の要求とみ
 | reconciler | 通知の取りこぼしの自己修復 |
 | dispatcher | イベントを受けて状態遷移とジョブ投入（短時間処理のみ） |
 | agent-worker | **エージェント起動を直列に処理する唯一の goroutine** |
+| web | 参照 UI の HTTP 待ち受け（§8）。パイプラインの判断には関与しない |
 
 `In Progress` の直列性は agent-worker が 1 本であることで保証される。
 `Verifying` の CI 確認は dispatcher 内で完結し、エージェントを起動しないためパイプラインを占有しない。
@@ -258,7 +263,12 @@ diff のインラインコメントを問わず、すべて行動の要求とみ
 - 実行中の item に新しいコメントが来た場合は**カーソルを進めない**。
   リコンサイルが再検出し、レーンが空いた時点で処理される。
 
-## 8. 残課題
+## 8. 参照 UI
+
+`run` プロセスに HTTP サーバを 1 つ同居させ、ローカル状態をブラウザから見られるようにする。
+`web.addr`（既定 `127.0.0.1:8787`、空文字で無効）で待ち受ける。
+
+## 9. 残課題
 
 - **cross-reference の通知有無**: 子 Issue から親 Issue を参照した際に親へ通知が飛ぶかは未検証。
   一旦「飛ばない」前提とする。飛ぶ場合でも親 Issue は Inbox で refine が走るだけなので致命的ではない。

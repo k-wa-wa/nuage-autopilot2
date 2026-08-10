@@ -1,9 +1,9 @@
-{{- /* Inbox での仕様精緻化プロンプト。 */ -}}
+{{- /* Inbox での仕様精緻化プロンプト */ -}}
 {{define "refine" -}}
 {{template "header" .}}
 ## あなたのタスク: 要求の精緻化
 
-人間が書いた曖昧な要求を、実装可能な仕様に落とし込みます。
+人間が書いた曖昧な要求を、実装可能な仕様に落とし込む。
 
 1. Issue 本文を読み、必要ならリポジトリのコードを調査する。
 2. 次の構成で Issue 本文を書き換える（`gh issue edit` を使う）:
@@ -14,23 +14,23 @@
 3. 判断できない不明点があれば、本文は草案のまま残し、質問を `gh issue comment` で投稿する。
    憶測で仕様を決めないこと。
 4. 1 つの PR に収まらない規模だと判断した場合は、親 Issue に全体仕様をまとめ、
-   子 Issue を起票して Project に紐付け、Status を Inbox に設定した上で sub-issue として紐付ける。
-   親 Issue 自体は実装対象にしない。
-   - **子 Issue は必ず GitHub Project に紐付け、Status を Inbox に設定すること**:
-{{if .HasProject}}{{if .HasProjectIDs}}     - 実行例:
-       ```bash
-       CHILD_URL=$(gh issue create --title "<子Issueのタイトル>" --body "<子Issueの本文>")
-       ITEM_ID=$(gh project item-add {{.ProjectNumber}} --owner {{.ProjectOwner}} --url "$CHILD_URL" --format json --jq .id)
-       gh project item-edit --id "$ITEM_ID" --project-id {{.ProjectID}} --field-id {{.ProjectStatusFieldID}} --single-select-option-id {{.ProjectInboxOptionID}}
-       ```
-{{else}}     - 実行例:
-       ```bash
-       CHILD_URL=$(gh issue create --title "<子Issueのタイトル>" --body "<子Issueの本文>")
-       ITEM_ID=$(gh project item-add {{.ProjectNumber}} --owner {{.ProjectOwner}} --url "$CHILD_URL" --format json --jq .id)
-       ```
-       ※ カード追加後、Status を {{.InboxStatusName}} に設定してください。
-{{end}}{{else}}     - `gh issue create` で起票後、`gh project item-add` で Project に追加し、Status を {{.InboxStatusName}} に設定してください。
-{{end}}   - 親 Issue の本文に各子 Issue へのリンクまたはチェックリストを記載して紐付ける。
+   子 Issue を起票する。親 Issue 自体は実装対象にしない。
+   子 Issue は 1 件ごとに次の 3 つをすべて行うこと。
+   - **親 Issue の sub-issue として登録する**。本文にリンクやチェックリストを書くだけでは
+     紐付いたことにならない。
+   - **Project に追加する**。追加されていない子 Issue はワーカーから見えず、永久に
+     着手されない。Status の設定は不要である（ワーカーが Inbox に載せて精緻化を開始する）。
+     ```bash
+     CHILD_URL=$(gh issue create --title "<子Issueのタイトル>" --body "<子Issueの本文>")
+
+     # sub_issue_id は Issue 番号ではなく内部 ID。番号を渡すと失敗する。
+     CHILD_ID=$(gh api "repos/{{.Repo}}/issues/${CHILD_URL##*/}" --jq .id)
+     gh api "repos/{{.Repo}}/issues/{{.Issue.Number}}/sub_issues" -F sub_issue_id="$CHILD_ID"
+
+     gh project item-add {{.ProjectNumber}} --owner {{.ProjectOwner}} --url "$CHILD_URL"
+     ```
+   - 親 Issue の本文には全体仕様とタスクの分割方針を残す。子 Issue の一覧は
+     sub-issue として GitHub が表示するので、本文に重複して書かなくてよい。
 5. 仕様が確定した場合は、最後に「仕様の精緻化が完了しました。内容をご確認の上、Ready に移動してください」
    という主旨のコメントを投稿する。
 

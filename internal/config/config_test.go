@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -124,5 +125,66 @@ func TestSpecCarriesAgentSettings(t *testing.T) {
 	// command からアダプタが解決されること。
 	if got := s.Adapter().Name(); got != "agy" {
 		t.Errorf("解決されたアダプタ = %s, want agy", got)
+	}
+}
+
+func TestWebAddrDefaults(t *testing.T) {
+	// 未指定なら既定のループバック。
+	var c Config
+	if got := c.Web.Listen(); got != DefaultWebAddr {
+		t.Errorf("未指定時 = %q, want %q", got, DefaultWebAddr)
+	}
+
+	// 明示的な空文字は「起動しない」の意味であり、既定で埋めてはならない。
+	empty := ""
+	c.Web.Addr = &empty
+	if got := c.Web.Listen(); got != "" {
+		t.Errorf("空文字指定が既定で上書きされています: %q", got)
+	}
+
+	addr := "0.0.0.0:9000"
+	c.Web.Addr = &addr
+	if got := c.Web.Listen(); got != addr {
+		t.Errorf("指定値 = %q, want %q", got, addr)
+	}
+}
+
+func TestValidateRejectsBadWebAddr(t *testing.T) {
+	bad := "8080"
+	c := &Config{
+		Project: Project{Owner: "o", Number: 1},
+		Repos:   []Repo{{Owner: "o", Name: "r"}},
+		Web:     Web{Addr: &bad},
+	}
+	if err := c.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	err := c.validate()
+	if err == nil || !strings.Contains(err.Error(), "web.addr") {
+		t.Errorf("host:port でない値が通っています: %v", err)
+	}
+
+	// 空文字（無効化）は検証を通ること。
+	empty := ""
+	c.Web.Addr = &empty
+	if err := c.validate(); err != nil {
+		t.Errorf("無効化の指定が弾かれています: %v", err)
+	}
+}
+
+// YAML から web.addr が読めること。
+func TestLoadReadsWebAddr(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yaml")
+	body := "project:\n  owner: o\n  number: 1\nrepos:\n  - owner: o\n    name: r\nweb:\n  addr: \"127.0.0.1:9999\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load に失敗: %v", err)
+	}
+	if got := c.Web.Listen(); got != "127.0.0.1:9999" {
+		t.Errorf("web.addr = %q", got)
 	}
 }

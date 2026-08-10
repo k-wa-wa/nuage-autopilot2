@@ -37,39 +37,20 @@ var funcs = template.FuncMap{
 
 // Context はプロンプト生成に必要な情報。
 type Context struct {
-	Repo                 string
-	Issue                *gh.Issue
-	Comments             []gh.Comment
-	ReviewComments       []gh.ReviewComment // PR の diff に付いた行コメント
-	NewInputs            []string           // 今回の起床要因となった人間の発言
-	PRNumber             int
-	Gate                 string // 品質ゲート定義ファイルの内容
-	GatePath             string
-	RetryCount           int
-	MaxRetries           int
-	CIHint               string // CI 失敗などの追加情報
-	ProjectOwner         string
-	ProjectNumber        int
-	ProjectID            string
-	ProjectStatusFieldID string
-	ProjectInboxOptionID string
-	StatusInbox          string
-}
-
-// HasProject は子 Issue を追加すべき Project が特定できているかを返す。
-func (c Context) HasProject() bool { return c.ProjectOwner != "" && c.ProjectNumber > 0 }
-
-// HasProjectIDs は Status を API で直接設定できるだけの ID が揃っているかを返す。
-func (c Context) HasProjectIDs() bool {
-	return c.ProjectID != "" && c.ProjectStatusFieldID != "" && c.ProjectInboxOptionID != ""
-}
-
-// InboxStatusName は Inbox レーンの表示名を返す。未設定なら既定値。
-func (c Context) InboxStatusName() string {
-	if c.StatusInbox != "" {
-		return c.StatusInbox
-	}
-	return "Inbox"
+	Repo           string
+	Issue          *gh.Issue
+	Comments       []gh.Comment
+	ReviewComments []gh.ReviewComment // PR の diff に付いた行コメント
+	NewInputs      []string           // 今回の起床要因となった人間の発言
+	PRNumber       int
+	Gate           string // 品質ゲート定義ファイルの内容
+	GatePath       string
+	RetryCount     int
+	MaxRetries     int
+	CIHint         string // CI 失敗などの追加情報
+	// Project は子 Issue を追加する先。config で必須なので常に埋まる。
+	ProjectOwner  string
+	ProjectNumber int
 }
 
 // render は名前付きテンプレートを実行して文字列にする。

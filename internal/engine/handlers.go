@@ -139,6 +139,23 @@ func (e *Engine) handleItemNew(ctx context.Context, ev Event) error {
 		e.enqueue(ctx, Job{Phase: PhaseRefine, Repo: ev.Repo, Issue: ev.Issue})
 	case e.cfg.Statuses.Ready:
 		return e.startImplement(ctx, it, nil, "")
+	case "":
+		// 分割時にエージェントが起票して Project に載せた子 Issue を引き取る。
+		// Status を持つのはワーカーだけという原則を保つため、エージェントには
+		// カードの追加までしかさせず、Inbox の設定はここで行う。
+		//
+		// 作成者が自分でないカード（人間が手で追加したもの、Projects の
+		// Auto-add workflow で流入したもの）は従来どおり放置する。これが無いと
+		// リポジトリの新規 Issue 全件に精緻化エージェントが走ってしまう。
+		if e.client.Login == "" || issue.User.Login != e.client.Login {
+			return nil
+		}
+		e.log.Info("エージェントが起票した子 Issue を Inbox に引き取ります",
+			"repo", ev.Repo, "issue", ev.Issue)
+		if err := e.setStatus(ctx, it, e.cfg.Statuses.Inbox); err != nil {
+			return err
+		}
+		e.enqueue(ctx, Job{Phase: PhaseRefine, Repo: ev.Repo, Issue: ev.Issue})
 	}
 	return nil
 }
@@ -166,6 +183,12 @@ func (e *Engine) handleStatusChanged(ctx context.Context, ev Event) error {
 	if ev.Status == e.cfg.Statuses.Ready {
 		it.RetryCount = 0
 		return e.startImplement(ctx, it, nil, "")
+	}
+	// Inbox に入った時点で精緻化を回す。子 Issue の Status 設定がポーリングを
+	// 跨いで EvItemNew ではなくこちらに届いた場合、これが無いとカードが
+	// 誰にも拾われないまま止まる。精緻化は Status を変えないので再帰しない。
+	if ev.Status == e.cfg.Statuses.Inbox {
+		e.enqueue(ctx, Job{Phase: PhaseRefine, Repo: ev.Repo, Issue: ev.Issue})
 	}
 	return nil
 }
@@ -580,30 +603,20 @@ func (e *Engine) promptContext(ctx context.Context, it *store.Item, inputs []str
 			return prompt.Context{}, err
 		}
 	}
-	var projectID, statusFieldID, inboxOptID string
-	if e.project != nil {
-		projectID = e.project.ID
-		statusFieldID = e.project.StatusFieldID
-		inboxOptID = e.project.Options[e.cfg.Statuses.Inbox]
-	}
 	return prompt.Context{
-		Repo:                 it.Repo,
-		Issue:                issue,
-		Comments:             comments,
-		ReviewComments:       reviewComments,
-		NewInputs:            inputs,
-		PRNumber:             it.PRNumber,
-		Gate:                 e.ws.ReadFile(it.Repo, e.cfg.GateFile),
-		GatePath:             e.cfg.GateFile,
-		RetryCount:           it.RetryCount,
-		MaxRetries:           e.cfg.Limits.MaxRetries,
-		CIHint:               hint,
-		ProjectOwner:         e.cfg.Project.Owner,
-		ProjectNumber:        e.cfg.Project.Number,
-		ProjectID:            projectID,
-		ProjectStatusFieldID: statusFieldID,
-		ProjectInboxOptionID: inboxOptID,
-		StatusInbox:          e.cfg.Statuses.Inbox,
+		Repo:           it.Repo,
+		Issue:          issue,
+		Comments:       comments,
+		ReviewComments: reviewComments,
+		NewInputs:      inputs,
+		PRNumber:       it.PRNumber,
+		Gate:           e.ws.ReadFile(it.Repo, e.cfg.GateFile),
+		GatePath:       e.cfg.GateFile,
+		RetryCount:     it.RetryCount,
+		MaxRetries:     e.cfg.Limits.MaxRetries,
+		CIHint:         hint,
+		ProjectOwner:   e.cfg.Project.Owner,
+		ProjectNumber:  e.cfg.Project.Number,
 	}, nil
 }
 
@@ -622,6 +635,10 @@ func (e *Engine) runJob(ctx context.Context, j Job) {
 	if err != nil {
 		e.log.Error("実行ログの記録に失敗", "err", err)
 	}
+	// 参照 UI 向けの記録。パイプラインの判断には影響しない（web.go を参照）。
+	e.beginActive(j, runID)
+	defer e.endActive()
+
 	result, err := e.execute(ctx, j, it)
 	outcome := "ok"
 	if err != nil {

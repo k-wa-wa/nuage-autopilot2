@@ -35,6 +35,7 @@ type fakeGitHub struct {
 	linkedPRNum    int
 	reviews        []gh.Review
 	reviewComments []gh.ReviewComment
+	issueAuthor    string // GetIssue が返す Issue の作成者。空なら作成者不明。
 }
 
 func newFakeGitHubServer(t *testing.T, s *fakeGitHub) *httptest.Server {
@@ -55,6 +56,7 @@ func newFakeGitHubServer(t *testing.T, s *fakeGitHub) *httptest.Server {
 				Title:  "Test Issue",
 				Body:   "Implement feature X",
 				State:  "open",
+				User:   gh.User{Login: s.issueAuthor},
 			})
 			return
 		}
@@ -835,6 +837,89 @@ cat > /dev/null
 	item, _ := e.st.Get("owner/repo", 1)
 	if !item.Terminal {
 		t.Errorf("Terminal = false, want true")
+	}
+}
+
+// 分割で起票された子 Issue（Status 未設定）をワーカーが Inbox に引き取る。
+// エージェントには Project への追加までしかさせないため、Status を入れるのは
+// ここが唯一の経路になる。
+func TestScenario_ChildIssueWithoutStatus_AdoptedIntoInbox(t *testing.T) {
+	fake := &fakeGitHub{issueAuthor: "test-bot"}
+	e, _, cleanup := setupTestEngine(t, fake, "#!/bin/sh\ncat > /dev/null\n")
+	defer cleanup()
+
+	err := e.handleItemNew(context.Background(), Event{
+		Kind: EvItemNew, Repo: "owner/repo", Issue: 1, ItemID: "item_1", Status: "",
+	})
+	if err != nil {
+		t.Fatalf("handleItemNew failed: %v", err)
+	}
+
+	if got := fake.statusRecord; len(got) != 1 || got[0] != "📥 Inbox" {
+		t.Errorf("Status の設定履歴 = %v, want [📥 Inbox]", got)
+	}
+	assertJob(t, e, PhaseRefine)
+}
+
+// 人間が追加したカードや Auto-add workflow で流入したカードは引き取らない。
+// これが無いとリポジトリの新規 Issue 全件に精緻化エージェントが走る。
+func TestScenario_ForeignIssueWithoutStatus_IsIgnored(t *testing.T) {
+	fake := &fakeGitHub{issueAuthor: "someone-else"}
+	e, _, cleanup := setupTestEngine(t, fake, "#!/bin/sh\ncat > /dev/null\n")
+	defer cleanup()
+
+	err := e.handleItemNew(context.Background(), Event{
+		Kind: EvItemNew, Repo: "owner/repo", Issue: 1, ItemID: "item_1", Status: "",
+	})
+	if err != nil {
+		t.Fatalf("handleItemNew failed: %v", err)
+	}
+
+	if len(fake.statusRecord) != 0 {
+		t.Errorf("Status を変更しています: %v", fake.statusRecord)
+	}
+	assertNoJob(t, e)
+}
+
+// Status の設定がポーリングを跨いで EvStatusChanged として届いた場合でも、
+// カードが誰にも拾われずに止まらないこと。
+func TestScenario_StatusChangedToInbox_EnqueuesRefine(t *testing.T) {
+	fake := &fakeGitHub{}
+	e, _, cleanup := setupTestEngine(t, fake, "#!/bin/sh\ncat > /dev/null\n")
+	defer cleanup()
+
+	e.st.Upsert(&store.Item{
+		Repo: "owner/repo", IssueNumber: 1, ProjectItemID: "item_1", LastStatus: "",
+	})
+
+	err := e.handleStatusChanged(context.Background(), Event{
+		Kind: EvStatusChanged, Repo: "owner/repo", Issue: 1, ItemID: "item_1",
+		Status: "📥 Inbox", Prev: "",
+	})
+	if err != nil {
+		t.Fatalf("handleStatusChanged failed: %v", err)
+	}
+	assertJob(t, e, PhaseRefine)
+}
+
+func assertJob(t *testing.T, e *Engine, want string) {
+	t.Helper()
+	select {
+	case j := <-e.jobs:
+		if j.Phase != want {
+			t.Errorf("投入されたジョブ = %s, want %s", j.Phase, want)
+		}
+	default:
+		t.Errorf("ジョブが投入されていません（want %s）", want)
+	}
+}
+
+func assertNoJob(t *testing.T, e *Engine) {
+	t.Helper()
+	select {
+	case j := <-e.jobs:
+		t.Errorf("ジョブが投入されています: %s", j.Phase)
+	default:
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -31,6 +32,27 @@ type Client struct {
 	graphqlURL string
 }
 
+// newTransport は長期稼働する常駐プロセス向けの HTTP Transport を構築する。
+//
+// NAT ルーター等のアイドル切断で TCP コネクションがブラックホール化した場合に
+// 備えて、ポーリング間隔（60s）より短い IdleConnTimeout と ResponseHeaderTimeout を設定する。
+// また、KeepAlive を短くして接続の健全性を保つ。
+func newTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 15 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		MaxIdleConnsPerHost:   5,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
 // New はトークンを環境変数（GH_TOKEN / GITHUB_TOKEN）から取得してクライアントを作る。
 func New() (*Client, error) {
 	token := firstNonEmpty(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN"))
@@ -39,18 +61,82 @@ func New() (*Client, error) {
 	}
 	return &Client{
 		token: token,
-		http:  &http.Client{Timeout: 60 * time.Second},
+		http: &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: newTransport(),
+		},
 	}, nil
 }
 
 // NewForTest はエンドポイントを差し替えた Client を作る。テストからのみ使う。
 func NewForTest(token, baseURL, gqlURL string) *Client {
 	return &Client{
-		token:      token,
-		http:       &http.Client{Timeout: 10 * time.Second},
+		token: token,
+		http: &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: newTransport(),
+		},
 		baseURL:    baseURL,
 		graphqlURL: gqlURL,
 	}
+}
+
+// do は HTTP リクエストを実行する。
+//
+// 通信エラーやタイムアウトが発生した際は、ゾンビ化した TCP コネクションが
+// プールに残らないよう CloseIdleConnections を呼び出す。
+// そのうえで retriable が真の場合に限り、新規接続で 1 回だけ透過的に再送する。
+//
+// **副作用を持つリクエストは再送しない。** 通信エラーからは「リクエストが届かなかった」
+// のか「サーバは処理を終えたが応答だけを取りこぼした」のかを区別できないため、
+// 再送は前者を救う代わりに後者を二重実行に変えてしまう。コメントの二重投稿や
+// Project フィールドの二重作成は人間から見える形で壊れるのに対し、取りこぼしは
+// 次のポーリング周回が拾い直す。再送しない方が安全側に倒れる。
+func (c *Client) do(req *http.Request, retriable bool) (*http.Response, error) {
+	resp, err := c.http.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	c.http.CloseIdleConnections()
+	if !retriable || req.Context().Err() != nil {
+		return nil, err
+	}
+	retryReq := req.Clone(req.Context())
+	if req.Body != nil {
+		// ボディは 1 回目で読み切られているので作り直す。作り直せないなら諦める。
+		if req.GetBody == nil {
+			return nil, err
+		}
+		body, bodyErr := req.GetBody()
+		if bodyErr != nil {
+			return nil, err
+		}
+		retryReq.Body = body
+	}
+	resp, err = c.http.Do(retryReq)
+	if err != nil {
+		c.http.CloseIdleConnections()
+		return nil, err
+	}
+	return resp, nil
+}
+
+// isRetriableMethod は再送しても副作用が増えない HTTP メソッドかを返す。
+func isRetriableMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead:
+		return true
+	}
+	return false
+}
+
+// isGraphQLMutation は GraphQL の操作が書き込みかどうかを返す。
+//
+// GraphQL では書き込みは必ず mutation キーワードで始まる（キーワードを省略した
+// `{ ... }` の短縮形は常に query）。したがって先頭語だけで判別でき、呼び出し側が
+// フラグを渡し忘れて mutation を再送対象にしてしまう事故が起きない。
+func isGraphQLMutation(op string) bool {
+	return strings.HasPrefix(strings.TrimLeft(op, " \t\r\n"), "mutation")
 }
 
 func (c *Client) restBaseURL() string {
@@ -115,7 +201,7 @@ func (c *Client) restWithHeader(ctx context.Context, method, path string, body a
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req, isRetriableMethod(method))
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +242,8 @@ func (c *Client) graphql(ctx context.Context, query string, vars map[string]any,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", userAgent)
 
-	resp, err := c.http.Do(req)
+	// GraphQL は読み書きとも POST なので、メソッドではなく操作の種類で判断する。
+	resp, err := c.do(req, !isGraphQLMutation(query))
 	if err != nil {
 		return err
 	}
