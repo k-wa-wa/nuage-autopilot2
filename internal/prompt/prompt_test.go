@@ -19,10 +19,16 @@ func sample() Context {
 		Comments: []gh.Comment{
 			{User: gh.User{Login: "k-wa-wa"}, Body: "OAuth も対応して", CreatedAt: time.Now()},
 		},
-		PRNumber:   34,
-		Gate:       "1. `npm run e2e` が通ること",
-		GatePath:   ".agents/autopilot-gate.md",
-		MaxRetries: 5,
+		PRNumber:             34,
+		Gate:                 "1. `npm run e2e` が通ること",
+		GatePath:             ".agents/autopilot-gate.md",
+		MaxRetries:           5,
+		ProjectOwner:         "k-wa-wa",
+		ProjectNumber:        1,
+		ProjectID:            "PVT_kwDOA12345",
+		ProjectStatusFieldID: "PVTSSF_67890",
+		ProjectInboxOptionID: "opt_inbox123",
+		StatusInbox:          "📥 Inbox",
 	}
 }
 
@@ -52,6 +58,32 @@ func TestRefineAsksForMarker(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Errorf("refine プロンプトに %q がありません", want)
 		}
+	}
+}
+
+func TestRefineSplitsWithProjectAndInbox(t *testing.T) {
+	c := sample()
+	p := Refine(c)
+	for _, want := range []string{
+		"gh project item-add 1 --owner k-wa-wa",
+		"gh project item-edit",
+		"PVT_kwDOA12345",
+		"PVTSSF_67890",
+		"opt_inbox123",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("refine プロンプトに %q が含まれていません", want)
+		}
+	}
+
+	// Project ID などが未解決の場合のフォールバック
+	cFallback := sample()
+	cFallback.ProjectID = ""
+	cFallback.ProjectStatusFieldID = ""
+	cFallback.ProjectInboxOptionID = ""
+	pFallback := Refine(cFallback)
+	if !strings.Contains(pFallback, "gh project item-add 1 --owner k-wa-wa") || !strings.Contains(pFallback, "📥 Inbox") {
+		t.Errorf("フォールバック時の refine プロンプトが不正です:\n%s", pFallback)
 	}
 }
 

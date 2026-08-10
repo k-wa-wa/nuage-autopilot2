@@ -580,18 +580,30 @@ func (e *Engine) promptContext(ctx context.Context, it *store.Item, inputs []str
 			return prompt.Context{}, err
 		}
 	}
+	var projectID, statusFieldID, inboxOptID string
+	if e.project != nil {
+		projectID = e.project.ID
+		statusFieldID = e.project.StatusFieldID
+		inboxOptID = e.project.Options[e.cfg.Statuses.Inbox]
+	}
 	return prompt.Context{
-		Repo:           it.Repo,
-		Issue:          issue,
-		Comments:       comments,
-		ReviewComments: reviewComments,
-		NewInputs:      inputs,
-		PRNumber:       it.PRNumber,
-		Gate:           e.ws.ReadFile(it.Repo, e.cfg.GateFile),
-		GatePath:       e.cfg.GateFile,
-		RetryCount:     it.RetryCount,
-		MaxRetries:     e.cfg.Limits.MaxRetries,
-		CIHint:         hint,
+		Repo:                 it.Repo,
+		Issue:                issue,
+		Comments:             comments,
+		ReviewComments:       reviewComments,
+		NewInputs:            inputs,
+		PRNumber:             it.PRNumber,
+		Gate:                 e.ws.ReadFile(it.Repo, e.cfg.GateFile),
+		GatePath:             e.cfg.GateFile,
+		RetryCount:           it.RetryCount,
+		MaxRetries:           e.cfg.Limits.MaxRetries,
+		CIHint:               hint,
+		ProjectOwner:         e.cfg.Project.Owner,
+		ProjectNumber:        e.cfg.Project.Number,
+		ProjectID:            projectID,
+		ProjectStatusFieldID: statusFieldID,
+		ProjectInboxOptionID: inboxOptID,
+		StatusInbox:          e.cfg.Statuses.Inbox,
 	}, nil
 }
 

@@ -14,22 +14,28 @@ import (
 
 // Context はプロンプト生成に必要な情報。
 type Context struct {
-	Repo           string
-	Issue          *gh.Issue
-	Comments       []gh.Comment
-	ReviewComments []gh.ReviewComment // PR の diff に付いた行コメント
-	NewInputs      []string           // 今回の起床要因となった人間の発言
-	PRNumber       int
-	Gate           string // 品質ゲート定義ファイルの内容
-	GatePath       string
-	RetryCount     int
-	MaxRetries     int
-	CIHint         string // CI 失敗などの追加情報
+	Repo                 string
+	Issue                *gh.Issue
+	Comments             []gh.Comment
+	ReviewComments       []gh.ReviewComment // PR の diff に付いた行コメント
+	NewInputs            []string           // 今回の起床要因となった人間の発言
+	PRNumber             int
+	Gate                 string // 品質ゲート定義ファイルの内容
+	GatePath             string
+	RetryCount           int
+	MaxRetries           int
+	CIHint               string // CI 失敗などの追加情報
+	ProjectOwner         string
+	ProjectNumber        int
+	ProjectID            string
+	ProjectStatusFieldID string
+	ProjectInboxOptionID string
+	StatusInbox          string
 }
 
 const common = `あなたは自動開発パイプラインで動作する自律エージェントです。
 GitHub への書き込み（Issue 本文の更新・コメント投稿・PR 作成）は gh コマンドで自分で行ってください。
-ただし **GitHub Projects の Status フィールドは絶対に変更しないでください**。Status はワーカーが管理します。
+ただし **GitHub Projects の Status フィールドは絶対に変更しないでください**（分割時に新規起票した子 Issue の初期 Status を Inbox に設定する場合を除く）。Status はワーカーが管理します。
 
 対象リポジトリ: %s
 対象 Issue: #%d %s
@@ -53,8 +59,37 @@ func Refine(c Context) string {
 3. 判断できない不明点があれば、本文は草案のまま残し、質問を ` + "`gh issue comment`" + ` で投稿する。
    憶測で仕様を決めないこと。
 4. 1 つの PR に収まらない規模だと判断した場合は、親 Issue に全体仕様をまとめ、
-   子 Issue を ` + "`gh issue create`" + ` で起票して sub-issue として紐付ける。
+   子 Issue を起票して Project に紐付け、Status を Inbox に設定した上で sub-issue として紐付ける。
    親 Issue 自体は実装対象にしない。
+   - **子 Issue は必ず GitHub Project に紐付け、Status を Inbox に設定すること**:
+`)
+	if c.ProjectOwner != "" && c.ProjectNumber > 0 {
+		if c.ProjectID != "" && c.ProjectStatusFieldID != "" && c.ProjectInboxOptionID != "" {
+			fmt.Fprintf(&b, `     - 実行例:
+       `+"```bash"+`
+       CHILD_URL=$(gh issue create --title "<子Issueのタイトル>" --body "<子Issueの本文>")
+       ITEM_ID=$(gh project item-add %d --owner %s --url "$CHILD_URL" --format json --jq .id)
+       gh project item-edit --id "$ITEM_ID" --project-id %s --field-id %s --single-select-option-id %s
+       `+"```\n", c.ProjectNumber, c.ProjectOwner, c.ProjectID, c.ProjectStatusFieldID, c.ProjectInboxOptionID)
+		} else {
+			statusName := c.StatusInbox
+			if statusName == "" {
+				statusName = "Inbox"
+			}
+			fmt.Fprintf(&b, `     - 実行例:
+       `+"```bash"+`
+       CHILD_URL=$(gh issue create --title "<子Issueのタイトル>" --body "<子Issueの本文>")
+       ITEM_ID=$(gh project item-add %d --owner %s --url "$CHILD_URL" --format json --jq .id)
+       `+"```\n       ※ カード追加後、Status を %s に設定してください。\n", c.ProjectNumber, c.ProjectOwner, statusName)
+		}
+	} else {
+		statusName := c.StatusInbox
+		if statusName == "" {
+			statusName = "Inbox"
+		}
+		_, _ = b.WriteString(`     - ` + "`gh issue create`" + ` で起票後、` + "`gh project item-add`" + ` で Project に追加し、Status を ` + statusName + ` に設定してください。` + "\n")
+	}
+	b.WriteString(`   - 親 Issue の本文に各子 Issue へのリンクまたはチェックリストを記載して紐付ける。
 5. 仕様が確定した場合は、最後に「仕様の精緻化が完了しました。内容をご確認の上、Ready に移動してください」
    という主旨のコメントを投稿する。
 
