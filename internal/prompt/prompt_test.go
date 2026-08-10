@@ -57,12 +57,23 @@ func TestRefineAsksForMarker(t *testing.T) {
 	}
 }
 
-// 分割時、エージェントに求めるのは Project への追加までで、Status は触らせない。
+// 分割時、エージェントに求めるのは sub-issue 登録と Project への追加で、Status は触らせない。
 // Status の設定はワーカーの責務（handleItemNew が空 Status の子 Issue を引き取る）。
 func TestRefineSplitsWithProjectAdd(t *testing.T) {
 	p := Refine(sample())
 	if !strings.Contains(p, "gh project item-add 1 --owner k-wa-wa") {
 		t.Errorf("refine プロンプトに Project 追加の手順が含まれていません:\n%s", p)
+	}
+	// sub-issue 登録。sub_issue_id に Issue 番号を渡すと失敗するため、
+	// 内部 ID を引く手順ごと含まれていること。
+	for _, want := range []string{
+		"repos/k-wa-wa/example/issues/12/sub_issues",
+		"-F sub_issue_id=",
+		`gh api "repos/k-wa-wa/example/issues/${CHILD_URL##*/}" --jq .id`,
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("refine プロンプトに sub-issue 登録の手順 %q がありません:\n%s", want, p)
+		}
 	}
 	// Status を書き換えさせる指示が復活していないこと。
 	for _, forbidden := range []string{"item-edit", "single-select-option-id", "--field-id"} {
