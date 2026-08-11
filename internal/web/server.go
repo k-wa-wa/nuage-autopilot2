@@ -27,8 +27,26 @@ import (
 	"nuage-autopilot2/internal/store"
 )
 
+// assets 直下にはリポジトリで追跡する placeholder.html だけを置き、
+// フロントエンドのビルド生成物は assets/dist に閉じ込める。
+//
+// こう分けているのは、生成物を gitignore したまま埋め込みを成立させるためである。
+// embed のパターンは 1 つも一致しないとコンパイルエラーになるため、生成物だけを
+// 置く構成にすると、npm でビルドしていないクリーンなクローンで go build が失敗する。
+// 追跡対象のファイルを 1 つ同居させ、かつ vite の emptyOutDir がそれを消さないよう
+// 出力先を 1 段深くしている。
+//
 //go:embed assets
 var assetsFS embed.FS
+
+const (
+	// indexPath はフロントエンドをビルドしたときだけ存在する。
+	indexPath = "assets/dist/index.html"
+	// placeholderPath は未ビルドのときに代わりに返す案内ページ。常に存在する。
+	placeholderPath = "assets/placeholder.html"
+	// distRoot は配信対象の生成物のルート。
+	distRoot = "assets/dist"
+)
 
 // Active は agent-worker が今処理しているジョブ。
 //
@@ -88,11 +106,14 @@ type Server struct {
 func New(src Source, log *slog.Logger) *Server {
 	s := &Server{src: src, log: log, mux: http.NewServeMux()}
 
-	static, err := fs.Sub(assetsFS, "assets")
+	// 未ビルドでも assets/dist が無いだけなので、ここでは失敗させない。
+	// 実際に開けないことは各リクエストで 404 / 案内ページとして表面化する。
+	static, err := fs.Sub(assetsFS, distRoot)
 	if err != nil {
 		panic("web: 埋め込み資産を開けません: " + err.Error())
 	}
-	s.mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(static))))
+	fileServer := http.FileServer(http.FS(static))
+	s.mux.Handle("/assets/", fileServer)
 	s.mux.HandleFunc("/api/state", s.jsonHandler(s.handleState))
 	s.mux.HandleFunc("/api/item", s.jsonHandler(s.handleItem))
 	s.mux.HandleFunc("/api/run", s.jsonHandler(s.handleRun))
@@ -100,21 +121,46 @@ func New(src Source, log *slog.Logger) *Server {
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	// 画面はハッシュルーティングなので、それ以外はすべて index を返す。
+	// ルートは index.html、favicon 等の直下ファイルは配信、未知のパスは 404 を返す。
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
+		if r.URL.Path == "/" {
+			serveIndex(w)
 			return
 		}
-		b, err := assetsFS.ReadFile("assets/index.html")
+
+		trimmed := strings.TrimPrefix(r.URL.Path, "/")
+		if f, err := static.Open(trimmed); err == nil {
+			stat, err := f.Stat()
+			f.Close()
+			if err == nil && !stat.IsDir() {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	})
+	return s
+}
+
+// serveIndex は SPA のエントリを返す。
+//
+// フロントエンドが未ビルドのときは 500 で黙って落とさず、何をすれば直るかを
+// 書いた案内ページを 503 で返す。go build しただけのバイナリを起動しても
+// 原因がログにしか出ない状況を避けるためである。
+func serveIndex(w http.ResponseWriter) {
+	b, err := assetsFS.ReadFile(indexPath)
+	status := http.StatusOK
+	if err != nil {
+		b, err = assetsFS.ReadFile(placeholderPath)
 		if err != nil {
 			http.Error(w, "index を読めません", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(b)
-	})
-	return s
+		status = http.StatusServiceUnavailable
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	w.Write(b)
 }
 
 // ServeHTTP は参照専用であることを強制したうえでルーティングする。
@@ -197,20 +243,21 @@ func notFound(format string, a ...any) error {
 
 // itemView は items の 1 行に、直近の実行と実行中フラグを添えたもの。
 type itemView struct {
-	Repo        string     `json:"repo"`
-	Issue       int        `json:"issue"`
-	Status      string     `json:"status"`
-	PRNumber    int        `json:"pr_number"`
-	Branch      string     `json:"branch"`
-	RetryCount  int        `json:"retry_count"`
-	LeaseUntil  *time.Time `json:"lease_until"`
-	VerifySince *time.Time `json:"verify_since"`
-	Terminal    bool       `json:"terminal"`
-	UpdatedAt   *time.Time `json:"updated_at"`
-	IssueURL    string     `json:"issue_url"`
-	PRURL       string     `json:"pr_url"`
-	LastRun     *runView   `json:"last_run"`
-	Running     bool       `json:"running"`
+	Repo         string     `json:"repo"`
+	Issue        int        `json:"issue"`
+	Status       string     `json:"status"`
+	PRNumber     int        `json:"pr_number"`
+	Branch       string     `json:"branch"`
+	RetryCount   int        `json:"retry_count"`
+	LeaseUntil   *time.Time `json:"lease_until"`
+	VerifySince  *time.Time `json:"verify_since"`
+	Terminal     bool       `json:"terminal"`
+	UpdatedAt    *time.Time `json:"updated_at"`
+	ReconciledAt *time.Time `json:"reconciled_at"`
+	IssueURL     string     `json:"issue_url"`
+	PRURL        string     `json:"pr_url"`
+	LastRun      *runView   `json:"last_run"`
+	Running      bool       `json:"running"`
 }
 
 // runView は runs の 1 行。ログの有無まで含めて返す。
@@ -261,18 +308,19 @@ func (s *Server) state() (stateResponse, error) {
 	for _, it := range items {
 		running := active != nil && active.Repo == it.Repo && active.Issue == it.IssueNumber
 		v := itemView{
-			Repo:        it.Repo,
-			Issue:       it.IssueNumber,
-			Status:      it.LastStatus,
-			PRNumber:    it.PRNumber,
-			Branch:      it.Branch,
-			RetryCount:  it.RetryCount,
-			LeaseUntil:  timePtr(it.LeaseUntil),
-			VerifySince: timePtr(it.VerifySince),
-			Terminal:    it.Terminal,
-			UpdatedAt:   timePtr(it.UpdatedAt),
-			IssueURL:    fmt.Sprintf("https://github.com/%s/issues/%d", it.Repo, it.IssueNumber),
-			Running:     running,
+			Repo:         it.Repo,
+			Issue:        it.IssueNumber,
+			Status:       it.LastStatus,
+			PRNumber:     it.PRNumber,
+			Branch:       it.Branch,
+			RetryCount:   it.RetryCount,
+			LeaseUntil:   timePtr(it.LeaseUntil),
+			VerifySince:  timePtr(it.VerifySince),
+			Terminal:     it.Terminal,
+			UpdatedAt:    timePtr(it.UpdatedAt),
+			ReconciledAt: timePtr(it.ReconciledAt),
+			IssueURL:     fmt.Sprintf("https://github.com/%s/issues/%d", it.Repo, it.IssueNumber),
+			Running:      running,
 		}
 		if it.PRNumber != 0 {
 			v.PRURL = fmt.Sprintf("https://github.com/%s/pull/%d", it.Repo, it.PRNumber)

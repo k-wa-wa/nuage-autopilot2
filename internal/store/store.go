@@ -34,6 +34,9 @@ type Item struct {
 	VerifySince   time.Time
 	Terminal      bool
 	UpdatedAt     time.Time
+	// ReconciledAt は pollProjectOnce が Project API でこの Item を最後に確認した時刻。
+	// ゼロ値は「まだ一度も確認されていない（機能追加前のレコード）」を表す。
+	ReconciledAt time.Time
 }
 
 // Run は 1 回のエージェント実行の記録。
@@ -128,6 +131,17 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("runs.log_path の追加に失敗: %w", err)
 		}
 	}
+	// reconciled_at は pollProjectOnce が Project API で確認した最終時刻。
+	// 機能追加前の既存レコードは 0（ゼロ値 = 未確認）として扱う。
+	has, err = hasColumn(db, "items", "reconciled_at")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE items ADD COLUMN reconciled_at INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("items.reconciled_at の追加に失敗: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -165,7 +179,8 @@ func (s *Store) IsEmpty() (bool, error) {
 func (s *Store) Get(repo string, issue int) (*Item, error) {
 	row := s.db.QueryRow(`
 		SELECT repo, issue_number, project_item_id, last_status, last_comment_id,
-		       pr_number, branch, retry_count, lease_until, verify_since, terminal, updated_at
+		       pr_number, branch, retry_count, lease_until, verify_since, terminal, updated_at,
+		       reconciled_at
 		FROM items WHERE repo = ? AND issue_number = ?`, repo, issue)
 	it, err := scanItem(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -178,7 +193,8 @@ func (s *Store) Get(repo string, issue int) (*Item, error) {
 func (s *Store) List() ([]*Item, error) {
 	rows, err := s.db.Query(`
 		SELECT repo, issue_number, project_item_id, last_status, last_comment_id,
-		       pr_number, branch, retry_count, lease_until, verify_since, terminal, updated_at
+		       pr_number, branch, retry_count, lease_until, verify_since, terminal, updated_at,
+		       reconciled_at
 		FROM items ORDER BY repo, issue_number`)
 	if err != nil {
 		return nil, err
@@ -231,6 +247,17 @@ func (s *Store) Upsert(it *Item) error {
 		it.Repo, it.IssueNumber, it.ProjectItemID, it.LastStatus, it.LastCommentID,
 		it.PRNumber, it.Branch, it.RetryCount, unixOrZero(it.LeaseUntil), unixOrZero(it.VerifySince),
 		boolToInt(it.Terminal), it.UpdatedAt.Unix())
+	return err
+}
+
+// TouchReconciled は items.reconciled_at を現在時刻で更新する。
+//
+// pollProjectOnce が Project API からこの Item を確認できた際に呼び出す。
+// Upsert とは分離しているのは、確認時刻をイベントハンドラからではなく
+// ポーリングループ側でのみ更新したいためである。
+func (s *Store) TouchReconciled(repo string, issue int) error {
+	_, err := s.db.Exec(`UPDATE items SET reconciled_at = ? WHERE repo = ? AND issue_number = ?`,
+		time.Now().Unix(), repo, issue)
 	return err
 }
 
@@ -341,10 +368,11 @@ type scanner interface {
 
 func scanItem(r scanner) (*Item, error) {
 	var it Item
-	var lease, verify, updated int64
+	var lease, verify, updated, reconciled int64
 	var terminal int
 	err := r.Scan(&it.Repo, &it.IssueNumber, &it.ProjectItemID, &it.LastStatus, &it.LastCommentID,
-		&it.PRNumber, &it.Branch, &it.RetryCount, &lease, &verify, &terminal, &updated)
+		&it.PRNumber, &it.Branch, &it.RetryCount, &lease, &verify, &terminal, &updated,
+		&reconciled)
 	if err != nil {
 		return nil, err
 	}
@@ -352,6 +380,7 @@ func scanItem(r scanner) (*Item, error) {
 	it.VerifySince = timeOrZero(verify)
 	it.Terminal = terminal != 0
 	it.UpdatedAt = timeOrZero(updated)
+	it.ReconciledAt = timeOrZero(reconciled)
 	return &it, nil
 }
 

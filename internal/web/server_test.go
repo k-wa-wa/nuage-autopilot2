@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -310,8 +311,14 @@ func TestRunningLogFallsBackToActive(t *testing.T) {
 }
 
 func TestServesIndexAndAssets(t *testing.T) {
+	// 資産は npm でビルドしたときだけ埋め込まれる。未ビルドのクローンでも
+	// go test ./... が通るよう、ここは skip に倒す（未ビルド時の挙動は
+	// TestServesPlaceholderWithoutFrontend が担保する）。
+	if _, err := assetsFS.ReadFile(indexPath); err != nil {
+		t.Skip("フロントエンド未ビルド: cd web && npm ci && npm run build")
+	}
 	srv, _ := newTestServer(t)
-	for _, path := range []string{"/", "/assets/app.js", "/assets/style.css"} {
+	for _, path := range []string{"/", "/favicon.png"} {
 		res, err := http.Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -324,5 +331,32 @@ func TestServesIndexAndAssets(t *testing.T) {
 	}
 	if code := get(t, srv, "/does-not-exist", nil); code != http.StatusNotFound {
 		t.Errorf("未知のパスが %d", code)
+	}
+}
+
+// TestServesPlaceholderWithoutFrontend はフロントエンド未ビルドでも
+// サーバが起動し、案内ページと API を返すことを確かめる。
+func TestServesPlaceholderWithoutFrontend(t *testing.T) {
+	if _, err := assetsFS.ReadFile(indexPath); err == nil {
+		t.Skip("フロントエンドがビルド済みのため未ビルド時の経路は通らない")
+	}
+	srv, _ := newTestServer(t)
+
+	res, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("未ビルド時の / が %d", res.StatusCode)
+	}
+	if !bytes.Contains(body, []byte("npm run build")) {
+		t.Error("案内ページに復旧手順が出ていません")
+	}
+
+	// 資産が無くても API は動くこと。
+	if code := get(t, srv, "/api/state", nil); code != http.StatusOK {
+		t.Errorf("/api/state が %d", code)
 	}
 }

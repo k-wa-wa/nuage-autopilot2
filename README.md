@@ -52,6 +52,10 @@ Inbox ──[人間がドラッグ]──> Ready ──> In Progress ──> Ver
 ### 2. 検証と起動
 
 ```sh
+# 参照 UI は Go のバイナリに埋め込むが、生成物はリポジトリで追跡していない。
+# 先にビルドしないと UI が「未ビルド」の案内ページになる（API と CLI は動く）。
+cd web && npm ci && npm run build && cd ..
+
 go build -o autopilot ./cmd/autopilot
 
 ./autopilot doctor     # トークン・Project・Status 名・エージェント・clone を検証
@@ -117,3 +121,15 @@ go build -o autopilot ./cmd/autopilot
 go test ./...
 go vet ./...
 ```
+
+参照 UI（`web/`、React + Vite）は別立てである。
+
+```sh
+cd web
+npm ci
+npm run dev        # モック（MSW）で単体表示
+npm run build      # internal/web/assets/dist へ出力。go build はこれを埋め込む
+npm run storybook  # コンポーネント単体の確認
+```
+
+`nix build .` はフロントエンドのビルドを内包しているため、npm を先に走らせる必要はない。

@@ -56,6 +56,7 @@
             git
             gh
             sqlite
+            nodejs
           ];
         };
       });

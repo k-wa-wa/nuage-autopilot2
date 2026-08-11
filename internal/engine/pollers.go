@@ -58,6 +58,15 @@ func (e *Engine) pollProjectOnce(ctx context.Context) {
 			e.emit(ctx, Event{Kind: EvStatusChanged, Repo: pi.Repo, Issue: pi.IssueNumber,
 				ItemID: pi.ItemID, Status: pi.Status, Prev: cur.LastStatus})
 		}
+
+		// Project API に存在することを確認できた時刻を記録する。
+		// cur が nil（新規）の場合は EvItemNew でハンドラが Upsert した後なので、
+		// 次のポーリングサイクルで更新される（ここで触れると未挿入行への UPDATE になる）。
+		if cur != nil {
+			if err := e.st.TouchReconciled(pi.Repo, pi.IssueNumber); err != nil {
+				e.log.Error("reconcile 時刻の更新に失敗", "repo", pi.Repo, "issue", pi.IssueNumber, "err", err)
+			}
+		}
 	}
 }
 

@@ -1,3 +1,11 @@
 /autopilot
 /config.yaml
 /result
+
+# フロントエンドのビルド生成物・依存
+# assets 直下の placeholder.html は追跡する（go:embed を成立させるため）。
+/internal/web/assets/dist/
+/web/node_modules/
+/web/storybook-static/
+/web/dist/
+/web/tsconfig.tsbuildinfo
