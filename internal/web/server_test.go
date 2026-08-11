@@ -311,7 +311,7 @@ func TestRunningLogFallsBackToActive(t *testing.T) {
 
 func TestServesIndexAndAssets(t *testing.T) {
 	srv, _ := newTestServer(t)
-	for _, path := range []string{"/", "/assets/app.js", "/assets/style.css"} {
+	for _, path := range []string{"/", "/favicon.png"} {
 		res, err := http.Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)

@@ -1,3 +1,9 @@
 /autopilot
 /config.yaml
 /result
+
+# フロントエンドのビルド生成物・依存
+/internal/web/assets/
+/web/node_modules/
+/web/storybook-static/
+/web/dist/

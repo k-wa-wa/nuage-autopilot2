@@ -92,7 +92,8 @@ func New(src Source, log *slog.Logger) *Server {
 	if err != nil {
 		panic("web: 埋め込み資産を開けません: " + err.Error())
 	}
-	s.mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(static))))
+	fileServer := http.FileServer(http.FS(static))
+	s.mux.Handle("/assets/", fileServer)
 	s.mux.HandleFunc("/api/state", s.jsonHandler(s.handleState))
 	s.mux.HandleFunc("/api/item", s.jsonHandler(s.handleItem))
 	s.mux.HandleFunc("/api/run", s.jsonHandler(s.handleRun))
@@ -100,19 +101,29 @@ func New(src Source, log *slog.Logger) *Server {
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-	// 画面はハッシュルーティングなので、それ以外はすべて index を返す。
+	// ルートは index.html、favicon 等の直下ファイルは配信、未知のパスは 404 を返す。
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
+		if r.URL.Path == "/" {
+			b, err := assetsFS.ReadFile("assets/index.html")
+			if err != nil {
+				http.Error(w, "index を読めません", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(b)
 			return
 		}
-		b, err := assetsFS.ReadFile("assets/index.html")
-		if err != nil {
-			http.Error(w, "index を読めません", http.StatusInternalServerError)
-			return
+
+		trimmed := strings.TrimPrefix(r.URL.Path, "/")
+		if f, err := static.Open(trimmed); err == nil {
+			stat, err := f.Stat()
+			f.Close()
+			if err == nil && !stat.IsDir() {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(b)
+		http.NotFound(w, r)
 	})
 	return s
 }
