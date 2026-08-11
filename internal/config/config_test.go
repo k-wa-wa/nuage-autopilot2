@@ -116,15 +116,40 @@ func TestValidateRejectsUnknownAgentUse(t *testing.T) {
 }
 
 func TestSpecCarriesAgentSettings(t *testing.T) {
-	a := Agent{Command: "/opt/agy", Model: "m", Args: []string{"--x"}, Timeout: time.Minute}
+	a := Agent{Command: "/opt/agy", Model: "m", Args: []string{"--x"}, Timeout: time.Minute, CustomPrompt: "追加指示"}
 	s := a.Spec()
 	if s.ResolvedCommand() != "/opt/agy" || s.Model != "m" ||
 		len(s.ExtraArgs) != 1 || s.Timeout != time.Minute {
 		t.Errorf("Spec への変換が不正: %+v", s)
 	}
+	if s.CustomPrompt != "追加指示" {
+		t.Errorf("CustomPrompt が Spec に伝播していません: %q", s.CustomPrompt)
+	}
 	// command からアダプタが解決されること。
 	if got := s.Adapter().Name(); got != "agy" {
 		t.Errorf("解決されたアダプタ = %s, want agy", got)
+	}
+}
+
+// YAML から custom_prompt が読めること。
+func TestLoadReadsCustomPrompt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yaml")
+	body := "project:\n  owner: o\n  number: 1\nrepos:\n  - owner: o\n    name: r\nagents:\n  implement:\n    custom_prompt: \"必ず日本語のコミットメッセージを書くこと\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load に失敗: %v", err)
+	}
+	got := c.AgentFor(AgentImplement).CustomPrompt
+	if got != "必ず日本語のコミットメッセージを書くこと" {
+		t.Errorf("custom_prompt = %q", got)
+	}
+	// 未指定の用途は空のままであること。
+	if got := c.AgentFor(AgentReview).CustomPrompt; got != "" {
+		t.Errorf("未指定の review に custom_prompt が設定されています: %q", got)
 	}
 }
 

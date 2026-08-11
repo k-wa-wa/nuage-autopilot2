@@ -105,7 +105,7 @@ func (r *Runner) Run(ctx context.Context, s Spec, phase, workDir, prompt string)
 	}
 
 	inv, err := adapter.Build(Request{
-		Prompt:    prompt,
+		Prompt:    applyCustomPrompt(prompt, s.CustomPrompt),
 		Model:     s.Model,
 		ExtraArgs: s.ExtraArgs,
 		Timeout:   timeout,
@@ -210,4 +210,13 @@ func parseMarkers(s string) map[string]string {
 		out[m[1]] = strings.TrimSpace(m[2])
 	}
 	return out
+}
+
+// applyCustomPrompt は custom が空でなければ、プロンプト末尾にセパレータ付きで追記する。
+// テンプレート側を変更せずに用途ごとのカスタム指示を差し込むための唯一の接点。
+func applyCustomPrompt(prompt, custom string) string {
+	if custom == "" {
+		return prompt
+	}
+	return prompt + "\n\n---\n\n" + strings.TrimSpace(custom)
 }

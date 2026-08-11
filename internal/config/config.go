@@ -118,16 +118,20 @@ type Agent struct {
 	Env  map[string]string `yaml:"env"`
 	// Timeout が 0 の場合は Limits の既定値を使う。
 	Timeout time.Duration `yaml:"timeout"`
+	// CustomPrompt はテンプレートが生成したプロンプトの末尾に追記するテキスト。
+	// エージェントのくせや追加指示を用途ごとに差し込みたい場合に使う。
+	CustomPrompt string `yaml:"custom_prompt"`
 }
 
 // Spec はランタイム用の起動設定に変換する。
 func (a Agent) Spec() agent.Spec {
 	return agent.Spec{
-		Command:   a.Command,
-		Model:     a.Model,
-		ExtraArgs: a.Args,
-		Env:       a.Env,
-		Timeout:   a.Timeout,
+		Command:      a.Command,
+		Model:        a.Model,
+		ExtraArgs:    a.Args,
+		Env:          a.Env,
+		Timeout:      a.Timeout,
+		CustomPrompt: a.CustomPrompt,
 	}
 }
 

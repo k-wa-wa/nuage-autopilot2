@@ -62,14 +62,21 @@ limits:
 #
 # パス指定（/home/nixos/.local/bin/agy など）でもコマンド名で判定する。
 # 省略した用途は claude になる。
+#
+# custom_prompt: テンプレートが生成したプロンプトの末尾に追記するテキスト。
+# エージェントのくせや役割（使用言語・コミットスタイルなど）を用途ごとに指定できる。
 agents:
   refine:
     command: claude
   implement:
     command: claude
+    # custom_prompt: |
+    #   必ず日本語のコミットメッセージを書いてください。
   review:
     command: agy
     # model: gemini-3.6-flash-high
+    # custom_prompt: |
+    #   あなたは Gemini です。日本語でレビューコメントを書いてください。
   triage:
     command: claude
 # 全エージェントに渡す追加の環境変数。
