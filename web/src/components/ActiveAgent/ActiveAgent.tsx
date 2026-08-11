@@ -1,6 +1,6 @@
 import React from 'react';
 import type { Active } from '../../types/api';
-import { Bot, Terminal, Clock, Layers, ArrowRight, Loader2 } from 'lucide-react';
+import { Bot, Clock, Layers, ArrowRight, Loader2 } from 'lucide-react';
 import { fmtTime, fmtSince } from '../../utils/format';
 
 interface ActiveAgentProps {
@@ -20,83 +20,80 @@ export const ActiveAgent: React.FC<ActiveAgentProps> = ({
 }) => {
   if (!active) {
     return (
-      <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-500">
-            <Bot className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-sm font-medium text-slate-300">エージェント待機中</div>
-            <div className="text-xs text-slate-500">
-              {queueDepth > 0
-                ? `待機キューに ${queueDepth} 件のジョブがあります`
-                : '現在実行中のジョブはありません'}
-            </div>
-          </div>
+      <div className="bg-[#161b22] border border-[#30363d] rounded-md p-3 sm:p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-2.5">
+          <Bot className="w-4 h-4 text-[#8b949e]" />
+          <span className="text-[#8b949e]">
+            {queueDepth > 0
+              ? `待機中（キューに ${queueDepth} 件）`
+              : '待機中。実行中のエージェントはない。'}
+          </span>
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-slate-400 font-mono bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800/80">
-          <Layers className="w-3.5 h-3.5 text-slate-500" />
-          <span>Queue: {queueDepth}</span>
-        </div>
+        {queueDepth > 0 && (
+          <div className="flex items-center gap-1 text-[#8b949e] font-mono text-[11px]">
+            <Layers className="w-3 h-3" />
+            <span>Queue: {queueDepth}</span>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="bg-gradient-to-r from-slate-900 via-amber-950/20 to-slate-900 border border-amber-500/30 rounded-xl p-4 shadow-lg shadow-amber-500/5 relative overflow-hidden">
-      <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
-
-      <div className="flex flex-wrap items-center justify-between gap-4 relative z-10">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shadow-inner animate-pulse">
-            <Loader2 className="w-5 h-5 animate-spin" />
+    <div className="bg-[#161b22] border border-[#30363d] rounded-md p-3 sm:p-4 text-xs">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-start sm:items-center gap-2.5 min-w-0">
+          <div className="w-6 h-6 rounded bg-[#21262d] flex items-center justify-center text-[#d29922] shrink-0 mt-0.5 sm:mt-0">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
           </div>
 
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded text-xs font-semibold uppercase tracking-wider">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="bg-[#21262d] text-[#c9d1d9] border border-[#30363d] px-1.5 py-0.2 rounded text-[11px] font-mono uppercase">
                 {active.phase}
               </span>
               <button
                 onClick={() => onSelectIssue?.(active.repo, active.issue)}
-                className="text-sm font-semibold text-slate-100 hover:text-cyan-300 transition-colors flex items-center gap-1 font-mono"
+                className="font-semibold text-[#f0f6fc] hover:text-[#58a6ff] transition-colors font-mono truncate"
               >
                 {active.repo} #{active.issue}
               </button>
+              <span className="text-[11px] text-[#d29922] font-mono">
+                実行中
+              </span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-4 mt-1.5 text-xs text-slate-400 font-mono">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-[11px] text-[#8b949e] font-mono">
               <div className="flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-amber-400/80" />
-                <span>ジョブ開始: {fmtTime(active.started_at)} ({fmtSince(active.started_at)}前)</span>
+                <Clock className="w-3 h-3 text-[#8b949e]" />
+                <span>開始: {fmtTime(active.started_at)} ({fmtSince(active.started_at)}前)</span>
               </div>
-              <div>
+              <div className="truncate">
                 <span>プロセス: </span>
-                <span className="text-slate-300">
+                <span className="text-[#c9d1d9]">
                   {active.agent_started_at
                     ? `${fmtSince(active.agent_started_at)}前 起動`
-                    : '準備中 (同期・プロンプト生成)'}
+                    : '準備中'}
                 </span>
               </div>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-xs text-slate-400 font-mono bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800">
-            <Layers className="w-3.5 h-3.5 text-amber-400" />
+        <div className="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#21262d]">
+          <div className="flex items-center gap-1 text-[11px] text-[#8b949e] font-mono">
+            <Layers className="w-3 h-3" />
             <span>Queue: {queueDepth}</span>
           </div>
 
           {activeHasLog && (
             <button
               onClick={() => onSelectRun?.(active.run_id)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold shadow-md shadow-amber-500/20 transition-colors"
+              className="inline-flex items-center gap-1 text-[11px] text-[#58a6ff] hover:underline font-mono"
             >
-              <Terminal className="w-3.5 h-3.5" />
-              <span>ログをリアルタイム追従</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <span>ログを見る</span>
+              <ArrowRight className="w-3 h-3" />
             </button>
           )}
         </div>

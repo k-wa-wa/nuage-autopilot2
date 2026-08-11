@@ -3,7 +3,7 @@ import type { StateResponse, ItemView, RunResponse, ItemResponse, LogView } from
 import { api } from './api/client';
 import { TopBar } from './components/TopBar/TopBar';
 import { ActiveAgent } from './components/ActiveAgent/ActiveAgent';
-import { KanbanBoard } from './components/Kanban/KanbanBoard';
+import { LaneList } from './components/LaneList/LaneList';
 import { ItemDetailModal } from './components/ItemDetail/ItemDetailModal';
 import { LogViewer } from './components/LogViewer/LogViewer';
 import { AlertCircle } from 'lucide-react';
@@ -16,9 +16,9 @@ export const App: React.FC = () => {
   // ルーティング状態（ハッシュからパース）
   const [route, setRoute] = useState<string>(window.location.hash || '#/');
 
-  // Issue詳細モーダル用
-  const [selectedItem, setSelectedItem] = useState<ItemView | null>(null);
-  const [itemRuns, setItemRuns] = useState<ItemResponse['runs']>([]);
+  // Issue詳細モーダル用 (repo と issue でターゲットを特定)
+  const [targetItemKey, setTargetItemKey] = useState<{ repo: string; issue: number } | null>(null);
+  const [itemDetail, setItemDetail] = useState<ItemResponse | null>(null);
   const [isLoadingRuns, setIsLoadingRuns] = useState(false);
 
   // ログビューア用
@@ -61,7 +61,7 @@ export const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [fetchState]);
 
-  // ルートの解析とデータ同期
+  // ルートの解析
   useEffect(() => {
     const hash = route.replace(/^#/, '');
 
@@ -70,7 +70,7 @@ export const App: React.FC = () => {
       const runId = Number(hash.split('/')[2]);
       if (!isNaN(runId)) {
         setSelectedRunId(runId);
-        setSelectedItem(null);
+        setTargetItemKey(null);
         return;
       }
     }
@@ -82,48 +82,59 @@ export const App: React.FC = () => {
       const issue = Number(parts[3]);
       if (repo && !isNaN(issue)) {
         setSelectedRunId(null);
-        // state から item を探す
-        if (state) {
-          const found = state.items.find((it) => it.repo === repo && it.issue === issue);
-          if (found) {
-            setSelectedItem(found);
-          }
-        }
+        setTargetItemKey((prev) => {
+          if (prev?.repo === repo && prev?.issue === issue) return prev;
+          return { repo, issue };
+        });
         return;
       }
     }
 
     // #/ (ダッシュボード)
     setSelectedRunId(null);
-    setSelectedItem(null);
-  }, [route, state]);
+    setTargetItemKey(null);
+  }, [route]);
 
-  // Item詳細が開かれたときの Run 履歴取得
+  // Item詳細が開かれたときのデータ取得 (初回のみローディング表示、以降はサイレント更新)
   useEffect(() => {
-    if (!selectedItem) {
-      setItemRuns([]);
+    if (!targetItemKey) {
+      setItemDetail(null);
       return;
     }
+
+    const { repo, issue } = targetItemKey;
     let isCancelled = false;
+
+    // 初回のみローディング表示
     setIsLoadingRuns(true);
-    api
-      .getItem(selectedItem.repo, selectedItem.issue)
-      .then((res) => {
+
+    const loadItem = async (isFirst: boolean) => {
+      try {
+        const res = await api.getItem(repo, issue);
         if (!isCancelled) {
-          setItemRuns(res.runs);
+          setItemDetail(res);
         }
-      })
-      .catch((err) => {
-        console.error('Failed to fetch item runs:', err);
-      })
-      .finally(() => {
-        if (!isCancelled) setIsLoadingRuns(false);
-      });
+      } catch (err) {
+        if (!isCancelled && isFirst) {
+          console.error('Failed to fetch item detail:', err);
+        }
+      } finally {
+        if (!isCancelled && isFirst) {
+          setIsLoadingRuns(false);
+        }
+      }
+    };
+
+    loadItem(true);
+
+    // モーダルが開いている間は 3 秒ごとにサイレント更新
+    const interval = setInterval(() => loadItem(false), 3000);
 
     return () => {
       isCancelled = true;
+      clearInterval(interval);
     };
-  }, [selectedItem]);
+  }, [targetItemKey]);
 
   // Run詳細の取得とリアルタイムログストリーミング追従
   useEffect(() => {
@@ -136,7 +147,6 @@ export const App: React.FC = () => {
     let isCancelled = false;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // 初回の完全な Run データ取得
     api
       .getRun(selectedRunId)
       .then((res) => {
@@ -144,7 +154,6 @@ export const App: React.FC = () => {
         setRunDetail(res);
         logOffsetRef.current = res.log?.size || 0;
 
-        // 実行中の場合は差分ストリーミングを開始
         if (res.run.running) {
           setIsStreamingLog(true);
           const pollLog = async () => {
@@ -180,7 +189,6 @@ export const App: React.FC = () => {
                 pollTimer = setTimeout(pollLog, 1500);
               } else {
                 setIsStreamingLog(false);
-                // 終了した場合は最終状態を再取得
                 const finalRun = await api.getRun(selectedRunId);
                 if (!isCancelled) setRunDetail(finalRun);
               }
@@ -220,18 +228,17 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-[#0d1117] text-[#c9d1d9] flex flex-col font-sans selection:bg-[#58a6ff]/20">
       <TopBar
-        meta={state?.meta}
         generatedAt={state?.generated_at}
         isRefreshing={isRefreshing}
         onRefresh={() => fetchState(true)}
       />
 
-      <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full">
+      <main className="flex-1 p-3 sm:p-4 md:p-6 max-w-5xl mx-auto w-full">
         {error && (
-          <div className="mb-4 p-4 rounded-xl bg-rose-950/40 border border-rose-800/80 text-rose-300 text-xs flex items-center gap-2 shadow-lg">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          <div className="mb-4 p-3.5 rounded-lg bg-[#3d1114]/40 border border-[#da3633]/60 text-[#f85149] text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-[#f85149] shrink-0" />
             <span>サーバとの通信に失敗しました: {error}</span>
           </div>
         )}
@@ -246,8 +253,8 @@ export const App: React.FC = () => {
             onBack={handleBackToDashboard}
           />
         ) : (
-          /* ダッシュボード (カンバン & ActiveAgent) */
-          <div className="space-y-6">
+          /* ダッシュボード (縦並びレーン & ActiveAgent) */
+          <div className="space-y-4">
             <ActiveAgent
               active={state?.active}
               queueDepth={state?.queue_depth ?? 0}
@@ -259,25 +266,25 @@ export const App: React.FC = () => {
             />
 
             {state ? (
-              <KanbanBoard
+              <LaneList
                 statuses={state.meta.statuses}
                 items={state.items}
                 onSelectItem={handleSelectItem}
                 onSelectRun={handleSelectRun}
               />
             ) : (
-              <div className="py-20 text-center text-slate-500 font-mono text-xs">
-                カンバンデータを読み込み中…
+              <div className="py-20 text-center text-[#8b949e] font-mono text-xs">
+                データを読み込み中…
               </div>
             )}
           </div>
         )}
 
         {/* Item詳細モーダル */}
-        {selectedItem && (
+        {targetItemKey && itemDetail && (
           <ItemDetailModal
-            item={selectedItem}
-            runs={itemRuns}
+            item={itemDetail.item}
+            runs={itemDetail.runs}
             isLoadingRuns={isLoadingRuns}
             onClose={handleBackToDashboard}
             onSelectRun={handleSelectRun}
