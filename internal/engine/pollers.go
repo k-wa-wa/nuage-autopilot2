@@ -49,11 +49,22 @@ func (e *Engine) pollProjectOnce(ctx context.Context) {
 		case cur == nil:
 			e.emit(ctx, Event{Kind: EvItemNew, Repo: pi.Repo, Issue: pi.IssueNumber,
 				ItemID: pi.ItemID, Status: pi.Status})
-		case cur.Terminal:
-			// 終端。何が起きても起動しない。
 		case pi.IsClosed():
-			e.emit(ctx, Event{Kind: EvClosed, Repo: pi.Repo, Issue: pi.IssueNumber,
-				ItemID: pi.ItemID, Status: pi.Status})
+			// クローズされた Issue は終端かつ Done で確定させる。
+			// 通知を取りこぼして直前のステータス（In Review 等）のまま残るのを防ぐため、
+			// まだ Done に反映されていない場合は EvClosed を流して同期する。
+			if !cur.Terminal || cur.LastStatus != e.cfg.Statuses.Done {
+				e.emit(ctx, Event{Kind: EvClosed, Repo: pi.Repo, Issue: pi.IssueNumber,
+					ItemID: pi.ItemID, Status: pi.Status})
+			}
+		case cur.Terminal:
+			// 終端。何が起きても起動しないが、Project 上で Status が変わっていれば表示用に同期する。
+			if pi.Status != cur.LastStatus {
+				cur.LastStatus = pi.Status
+				if err := e.st.Upsert(cur); err != nil {
+					e.log.Error("終端アイテムの Status 更新に失敗", "repo", pi.Repo, "issue", pi.IssueNumber, "err", err)
+				}
+			}
 		case pi.Status != cur.LastStatus:
 			e.emit(ctx, Event{Kind: EvStatusChanged, Repo: pi.Repo, Issue: pi.IssueNumber,
 				ItemID: pi.ItemID, Status: pi.Status, Prev: cur.LastStatus})

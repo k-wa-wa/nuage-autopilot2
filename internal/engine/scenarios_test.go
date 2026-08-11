@@ -838,6 +838,9 @@ cat > /dev/null
 	if !item.Terminal {
 		t.Errorf("Terminal = false, want true")
 	}
+	if item.LastStatus != e.cfg.Statuses.Done {
+		t.Errorf("LastStatus = %q, want %q", item.LastStatus, e.cfg.Statuses.Done)
+	}
 }
 
 // 分割で起票された子 Issue（Status 未設定）をワーカーが Inbox に引き取る。

@@ -198,10 +198,11 @@ func (e *Engine) handleClosed(ctx context.Context, ev Event) error {
 	if err != nil || it == nil {
 		return err
 	}
-	if it.Terminal {
+	if it.Terminal && it.LastStatus == e.cfg.Statuses.Done {
 		return nil
 	}
 	it.Terminal = true
+	it.LastStatus = e.cfg.Statuses.Done
 	it.LeaseUntil = time.Time{}
 	if err := e.st.Upsert(it); err != nil {
 		return err
