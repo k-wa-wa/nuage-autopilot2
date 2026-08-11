@@ -5,7 +5,11 @@ import './index.css';
 
 async function enableMocking() {
   const urlParams = new URLSearchParams(window.location.search);
-  const isMock = urlParams.has('mock') || import.meta.env.VITE_ENABLE_MOCK === 'true';
+  const hasCustomApi = urlParams.has('api') || Boolean(import.meta.env.VITE_API_URL);
+  const isMockDisabled = urlParams.get('mock') === 'false';
+
+  // 基本はローカル開発 (DEV) でモック ON。IP/API が指定された時や明示的 OFF の時だけ無効化
+  const isMock = import.meta.env.DEV && !hasCustomApi && !isMockDisabled;
 
   if (isMock) {
     const { setupWorker } = await import('msw/browser');
@@ -14,7 +18,7 @@ async function enableMocking() {
     await worker.start({
       onUnhandledRequest: 'bypass',
     });
-    console.log('[MSW] Mocking enabled');
+    console.log('[MSW] Mocking enabled (デフォルトモックON)');
   }
 }
 
