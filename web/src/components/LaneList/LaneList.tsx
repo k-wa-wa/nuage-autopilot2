@@ -18,15 +18,27 @@ export const LaneList: React.FC<LaneListProps> = ({
   items,
   onSelectItem,
 }) => {
+  // Project 上で確認できているアクティブなアイテムのみに絞り込む
+  // (reconciled_at が null または 1 時間以上古いデータは除外)
+  const activeItems = React.useMemo(() => {
+    const now = Date.now();
+    return items.filter((it) => {
+      if (!it.reconciled_at) return false;
+      const reconciledTime = new Date(it.reconciled_at).getTime();
+      if (isNaN(reconciledTime)) return false;
+      return now - reconciledTime <= STALE_MS;
+    });
+  }, [items]);
+
   const byStatus = React.useMemo(() => {
     const map = new Map<string, ItemView[]>();
-    for (const it of items) {
+    for (const it of activeItems) {
       const list = map.get(it.status) || [];
       list.push(it);
       map.set(it.status, list);
     }
     return map;
-  }, [items]);
+  }, [activeItems]);
 
   const orderedStatuses = React.useMemo(() => {
     const list = [...statuses];
@@ -89,20 +101,12 @@ export const LaneList: React.FC<LaneListProps> = ({
                     </tr>
                   ) : (
                     visibleItems.map((it) => {
-                      const isStale =
-                        it.reconciled_at &&
-                        Date.now() - new Date(it.reconciled_at).getTime() > STALE_MS;
-
                       return (
                         <tr
                           key={`${it.repo}#${it.issue}`}
                           onClick={() => onSelectItem(it)}
                           className={`hover:bg-[#21262d]/50 cursor-pointer transition-colors ${
-                            it.running
-                              ? 'bg-[#3b2300]/10'
-                              : isStale
-                                ? 'opacity-60 hover:opacity-100'
-                                : ''
+                            it.running ? 'bg-[#3b2300]/10' : ''
                           }`}
                         >
                           {/* Issue 列 */}
@@ -187,16 +191,12 @@ export const LaneList: React.FC<LaneListProps> = ({
                 </div>
               ) : (
                 visibleItems.map((it) => {
-                  const isStale =
-                    it.reconciled_at &&
-                    Date.now() - new Date(it.reconciled_at).getTime() > STALE_MS;
-
                   return (
                     <div
                       key={`${it.repo}#${it.issue}`}
                       onClick={() => onSelectItem(it)}
                       className={`p-3 space-y-1.5 cursor-pointer active:bg-[#21262d] ${
-                        it.running ? 'bg-[#3b2300]/10' : isStale ? 'opacity-60' : ''
+                        it.running ? 'bg-[#3b2300]/10' : ''
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
