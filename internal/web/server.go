@@ -197,20 +197,21 @@ func notFound(format string, a ...any) error {
 
 // itemView は items の 1 行に、直近の実行と実行中フラグを添えたもの。
 type itemView struct {
-	Repo        string     `json:"repo"`
-	Issue       int        `json:"issue"`
-	Status      string     `json:"status"`
-	PRNumber    int        `json:"pr_number"`
-	Branch      string     `json:"branch"`
-	RetryCount  int        `json:"retry_count"`
-	LeaseUntil  *time.Time `json:"lease_until"`
-	VerifySince *time.Time `json:"verify_since"`
-	Terminal    bool       `json:"terminal"`
-	UpdatedAt   *time.Time `json:"updated_at"`
-	IssueURL    string     `json:"issue_url"`
-	PRURL       string     `json:"pr_url"`
-	LastRun     *runView   `json:"last_run"`
-	Running     bool       `json:"running"`
+	Repo         string     `json:"repo"`
+	Issue        int        `json:"issue"`
+	Status       string     `json:"status"`
+	PRNumber     int        `json:"pr_number"`
+	Branch       string     `json:"branch"`
+	RetryCount   int        `json:"retry_count"`
+	LeaseUntil   *time.Time `json:"lease_until"`
+	VerifySince  *time.Time `json:"verify_since"`
+	Terminal     bool       `json:"terminal"`
+	UpdatedAt    *time.Time `json:"updated_at"`
+	ReconciledAt *time.Time `json:"reconciled_at"`
+	IssueURL     string     `json:"issue_url"`
+	PRURL        string     `json:"pr_url"`
+	LastRun      *runView   `json:"last_run"`
+	Running      bool       `json:"running"`
 }
 
 // runView は runs の 1 行。ログの有無まで含めて返す。
@@ -261,18 +262,19 @@ func (s *Server) state() (stateResponse, error) {
 	for _, it := range items {
 		running := active != nil && active.Repo == it.Repo && active.Issue == it.IssueNumber
 		v := itemView{
-			Repo:        it.Repo,
-			Issue:       it.IssueNumber,
-			Status:      it.LastStatus,
-			PRNumber:    it.PRNumber,
-			Branch:      it.Branch,
-			RetryCount:  it.RetryCount,
-			LeaseUntil:  timePtr(it.LeaseUntil),
-			VerifySince: timePtr(it.VerifySince),
-			Terminal:    it.Terminal,
-			UpdatedAt:   timePtr(it.UpdatedAt),
-			IssueURL:    fmt.Sprintf("https://github.com/%s/issues/%d", it.Repo, it.IssueNumber),
-			Running:     running,
+			Repo:         it.Repo,
+			Issue:        it.IssueNumber,
+			Status:       it.LastStatus,
+			PRNumber:     it.PRNumber,
+			Branch:       it.Branch,
+			RetryCount:   it.RetryCount,
+			LeaseUntil:   timePtr(it.LeaseUntil),
+			VerifySince:  timePtr(it.VerifySince),
+			Terminal:     it.Terminal,
+			UpdatedAt:    timePtr(it.UpdatedAt),
+			ReconciledAt: timePtr(it.ReconciledAt),
+			IssueURL:     fmt.Sprintf("https://github.com/%s/issues/%d", it.Repo, it.IssueNumber),
+			Running:      running,
 		}
 		if it.PRNumber != 0 {
 			v.PRURL = fmt.Sprintf("https://github.com/%s/pull/%d", it.Repo, it.PRNumber)

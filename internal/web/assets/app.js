@@ -8,6 +8,10 @@
 // LANE_LIMIT は 1 レーンに表示する最大件数。
 const LANE_LIMIT = 50;
 
+// STALE_MS は「最後に Project API で確認できた時刻」がこれより古い場合に画面上で含み展示する。
+// ポーリング間隔（数分単位）の数十倍を設定し、API 障害による誤検知を避ける。
+const STALE_MS = 60 * 60 * 1000; // 1 時間
+
 const view = document.getElementById("view");
 const metaEl = document.getElementById("meta");
 const stampEl = document.getElementById("stamp");
@@ -138,7 +142,11 @@ function renderActive(state) {
 }
 
 function itemRow(it) {
-  const tr = el("tr", { className: it.running ? "is-running" : "" });
+  const isStale = it.reconciled_at &&
+    (Date.now() - new Date(it.reconciled_at).getTime() > STALE_MS);
+  const classes = [it.running ? "is-running" : "", isStale ? "is-stale" : ""]
+    .filter(Boolean).join(" ");
+  const tr = el("tr", { className: classes });
   tr.append(
     el("td", {}, [
       el("a", { href: itemHash(it.repo, it.issue), textContent: `#${it.issue}` }),
@@ -267,6 +275,15 @@ async function showItem(repo, issue) {
     row("Verifying 開始", fmtTime(it.verify_since));
     row("終端", it.terminal ? "はい" : "いいえ");
     row("ローカル更新", fmtTime(it.updated_at));
+    if (it.reconciled_at) {
+      const isStale = Date.now() - new Date(it.reconciled_at).getTime() > STALE_MS;
+      const label = isStale
+        ? `${fmtTime(it.reconciled_at)}（⚠ ${fmtSince(it.reconciled_at)}前。Project に存在しない可能性）`
+        : `${fmtTime(it.reconciled_at)}（${fmtSince(it.reconciled_at)}前）`;
+      row("Project 確認時刻", label);
+    } else {
+      row("Project 確認時刻", el("span", { className: "muted", textContent: "-（記録なし）" }));
+    }
 
     const tbody = el("tbody");
     for (const run of data.runs) {

@@ -180,6 +180,15 @@ tbody tr:last-child td {
 tr.is-running {
   background: var(--running-bg);
 }
+/* Project API で長期間確認できていない行。削除・アーカイブの可能性を示す。 */
+tr.is-stale {
+  opacity: 0.45;
+}
+tr.is-stale td:first-child::after {
+  content: " ⚠";
+  font-size: 10px;
+  color: var(--muted);
+}
 td.num {
   font-variant-numeric: tabular-nums;
 }
