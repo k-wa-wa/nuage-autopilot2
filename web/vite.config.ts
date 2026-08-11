@@ -21,7 +21,9 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: process.env.OUT_DIR || '../internal/web/assets',
+    // assets 直下ではなく 1 段深い dist に出す。
+    // 追跡対象の placeholder.html を emptyOutDir に巻き込ませないためである。
+    outDir: process.env.OUT_DIR || '../internal/web/assets/dist',
     emptyOutDir: true,
   },
 });

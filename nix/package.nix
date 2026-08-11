@@ -42,25 +42,41 @@ buildGoModule {
   pname = "autopilot";
   inherit version;
 
+  # ビルドに要るものだけを含める。ドキュメントを直しても再ビルドされない。
+  # config.example.yaml は internal/config のテストが読むため必須。
+  #
+  # internal/web/assets/dist は必ず除く。作業ツリーが dirty なとき、flake は
+  # 追跡外のファイルも含めてディレクトリごとコピーするため、手元の
+  # npm run build の成果物が source に入り込み、derivation のハッシュが
+  # 手元の状態で変わる（古いハッシュ付きバンドルも一緒に埋め込まれる）。
+  # 中身は下の preBuild で改めて入れる。
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.unions [
       ../go.mod
       ../go.sum
       ../cmd
-      ../internal
+      (lib.fileset.difference ../internal (lib.fileset.maybeMissing ../internal/web/assets/dist))
       ../config.example.yaml
     ];
   };
 
   vendorHash = "sha256-8xWgUlGTyP85vEodUTcSOhs2gnwVBKBFw1vuliLM/ZM=";
 
-  # フロントエンドの成果物を internal/web/assets に配置して embed させる
+  # subPackages は指定しない。指定すると checkPhase の go test も
+  # そのパッケージだけになり、internal/ のテストが走らなくなる。
+  # main パッケージは cmd/autopilot だけなので、生成されるバイナリは 1 つ。
+
+  # フロントエンドの成果物を internal/web/assets/dist に配置して embed させる。
+  # src から除いてあるので、ここに置かれるのは常にこのビルドの出力だけである。
   preBuild = ''
-    mkdir -p internal/web/assets
-    cp -r ${frontend}/* internal/web/assets/
+    mkdir -p internal/web/assets/dist
+    cp -r ${frontend}/* internal/web/assets/dist/
   '';
 
+  # SQLite ドライバは pure Go（modernc.org/sqlite）なので cgo は不要。
+  # cgo 版に差し替えるとクロスコンパイルとこのビルドが壊れる。
+  # buildGoModule が CGO_ENABLED を derivation 引数として渡すため、env: では指定しない。
   CGO_ENABLED = 0;
 
   ldflags = [
@@ -68,6 +84,7 @@ buildGoModule {
     "-w"
   ];
 
+  # workspace / engine のテストは実際の git を起動する。
   nativeCheckInputs = [ git ];
 
   meta = {

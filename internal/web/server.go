@@ -27,8 +27,26 @@ import (
 	"nuage-autopilot2/internal/store"
 )
 
+// assets 直下にはリポジトリで追跡する placeholder.html だけを置き、
+// フロントエンドのビルド生成物は assets/dist に閉じ込める。
+//
+// こう分けているのは、生成物を gitignore したまま埋め込みを成立させるためである。
+// embed のパターンは 1 つも一致しないとコンパイルエラーになるため、生成物だけを
+// 置く構成にすると、npm でビルドしていないクリーンなクローンで go build が失敗する。
+// 追跡対象のファイルを 1 つ同居させ、かつ vite の emptyOutDir がそれを消さないよう
+// 出力先を 1 段深くしている。
+//
 //go:embed assets
 var assetsFS embed.FS
+
+const (
+	// indexPath はフロントエンドをビルドしたときだけ存在する。
+	indexPath = "assets/dist/index.html"
+	// placeholderPath は未ビルドのときに代わりに返す案内ページ。常に存在する。
+	placeholderPath = "assets/placeholder.html"
+	// distRoot は配信対象の生成物のルート。
+	distRoot = "assets/dist"
+)
 
 // Active は agent-worker が今処理しているジョブ。
 //
@@ -88,7 +106,9 @@ type Server struct {
 func New(src Source, log *slog.Logger) *Server {
 	s := &Server{src: src, log: log, mux: http.NewServeMux()}
 
-	static, err := fs.Sub(assetsFS, "assets")
+	// 未ビルドでも assets/dist が無いだけなので、ここでは失敗させない。
+	// 実際に開けないことは各リクエストで 404 / 案内ページとして表面化する。
+	static, err := fs.Sub(assetsFS, distRoot)
 	if err != nil {
 		panic("web: 埋め込み資産を開けません: " + err.Error())
 	}
@@ -104,13 +124,7 @@ func New(src Source, log *slog.Logger) *Server {
 	// ルートは index.html、favicon 等の直下ファイルは配信、未知のパスは 404 を返す。
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
-			b, err := assetsFS.ReadFile("assets/index.html")
-			if err != nil {
-				http.Error(w, "index を読めません", http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(b)
+			serveIndex(w)
 			return
 		}
 
@@ -126,6 +140,27 @@ func New(src Source, log *slog.Logger) *Server {
 		http.NotFound(w, r)
 	})
 	return s
+}
+
+// serveIndex は SPA のエントリを返す。
+//
+// フロントエンドが未ビルドのときは 500 で黙って落とさず、何をすれば直るかを
+// 書いた案内ページを 503 で返す。go build しただけのバイナリを起動しても
+// 原因がログにしか出ない状況を避けるためである。
+func serveIndex(w http.ResponseWriter) {
+	b, err := assetsFS.ReadFile(indexPath)
+	status := http.StatusOK
+	if err != nil {
+		b, err = assetsFS.ReadFile(placeholderPath)
+		if err != nil {
+			http.Error(w, "index を読めません", http.StatusInternalServerError)
+			return
+		}
+		status = http.StatusServiceUnavailable
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	w.Write(b)
 }
 
 // ServeHTTP は参照専用であることを強制したうえでルーティングする。
