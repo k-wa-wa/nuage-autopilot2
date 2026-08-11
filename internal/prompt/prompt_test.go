@@ -66,10 +66,12 @@ func TestRefineSplitsWithProjectAdd(t *testing.T) {
 	}
 	// sub-issue 登録。sub_issue_id に Issue 番号を渡すと失敗するため、
 	// 内部 ID を引く手順ごと含まれていること。
+	// 内部 ID は子 Issue 側（$CHILD_REPO）、登録先は親 Issue 側で、跨ぐ場合に別リポジトリになる。
 	for _, want := range []string{
 		"repos/k-wa-wa/example/issues/12/sub_issues",
 		"-F sub_issue_id=",
-		`gh api "repos/k-wa-wa/example/issues/${CHILD_URL##*/}" --jq .id`,
+		`gh api "repos/$CHILD_REPO/issues/${CHILD_URL##*/}" --jq .id`,
+		`gh issue create --repo "$CHILD_REPO"`,
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("refine プロンプトに sub-issue 登録の手順 %q がありません:\n%s", want, p)
@@ -91,6 +93,36 @@ func TestImplementRequiresClosesKeyword(t *testing.T) {
 	for _, want := range []string{"AUTOPILOT_ACTION", "PR_READY", "BLOCKED"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("implement プロンプトに %q がありません", want)
+		}
+	}
+}
+
+// Issue と PR は同じリポジトリという制約（DESIGN.md 設計のポイント 5）を、
+// 分割を判断する refine と、PR を作る implement の両方が伝えていること。
+func TestSameRepoConstraintIsStated(t *testing.T) {
+	c := sample()
+
+	// refine: 実装先が別リポジトリなら分割する、が分割条件に入っていること。
+	refine := Refine(c)
+	for _, want := range []string{
+		"実装先が k-wa-wa/example ではない",
+		"同じリポジトリに置く",
+		"CHILD_REPO",
+	} {
+		if !strings.Contains(refine, want) {
+			t.Errorf("refine プロンプトに %q がありません:\n%s", want, refine)
+		}
+	}
+
+	// implement: 他リポジトリに PR を作らず BLOCKED を報告すること。
+	impl := Implement(c)
+	for _, want := range []string{
+		"PR は必ず k-wa-wa/example に作ること",
+		"他のリポジトリに PR を作ってはならない",
+		"BLOCKED",
+	} {
+		if !strings.Contains(impl, want) {
+			t.Errorf("implement プロンプトに %q がありません:\n%s", want, impl)
 		}
 	}
 }

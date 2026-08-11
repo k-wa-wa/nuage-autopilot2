@@ -460,7 +460,7 @@ func (e *Engine) handleVerifyTick(ctx context.Context, ev Event) error {
 			return err
 		}
 		if pr == nil {
-			return e.block(ctx, it, "PR が見つかりません。実装エージェントが PR を作成しなかった可能性があります。")
+			return e.block(ctx, it, prompt.PRNotFoundVerify(prompt.Notice{Repo: it.Repo, Issue: it.IssueNumber}))
 		}
 		it.PRNumber = pr.Number
 		it.Branch = pr.HeadRefName
@@ -751,8 +751,7 @@ func (e *Engine) applyResult(ctx context.Context, j Job, it *store.Item, res *ag
 			return err
 		}
 		if pr == nil {
-			return e.block(ctx, it, "実装は完了したと報告されましたが、この Issue に紐づく PR が見つかりません。\n"+
-				"PR 本文に `Closes #"+strconv.Itoa(it.IssueNumber)+"` が含まれているか確認してください。")
+			return e.block(ctx, it, prompt.PRNotFoundImplement(prompt.Notice{Repo: it.Repo, Issue: it.IssueNumber}))
 		}
 		it.PRNumber = pr.Number
 		it.Branch = pr.HeadRefName

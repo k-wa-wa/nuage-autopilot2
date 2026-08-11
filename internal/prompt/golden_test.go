@@ -92,6 +92,14 @@ func goldenCases() map[string]func() string {
 		"triage_blocked_full":    func() string { return Triage(base(), TriageBlocked) },
 		"triage_blocked_minimal": func() string { return Triage(minimal(), TriageBlocked) },
 		"triage_unknown_mode":    func() string { return Triage(base(), TriageMode(99)) },
+
+		// ワーカーが投稿する通知文。宛先が人間なので文面の崩れに気付きにくい。
+		"notice_pr_not_found_implement": func() string {
+			return PRNotFoundImplement(Notice{Repo: "k-wa-wa/example", Issue: 12})
+		},
+		"notice_pr_not_found_verify": func() string {
+			return PRNotFoundVerify(Notice{Repo: "k-wa-wa/example", Issue: 12})
+		},
 	}
 }
 

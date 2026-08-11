@@ -56,9 +56,9 @@ type Context struct {
 // render は名前付きテンプレートを実行して文字列にする。
 // テンプレートは起動時に検証済みで、データも実行時に増減しないため、
 // ここでのエラーは発生し得ない（発生したらプログラムのバグ）。
-func render(name string, c Context) string {
+func render(name string, data any) string {
 	var b strings.Builder
-	if err := tmpl.ExecuteTemplate(&b, name, c); err != nil {
+	if err := tmpl.ExecuteTemplate(&b, name, data); err != nil {
 		panic("prompt: テンプレート " + name + " の実行に失敗: " + err.Error())
 	}
 	return b.String()
@@ -72,6 +72,18 @@ func Implement(c Context) string { return render("implement", c) }
 
 // Review は Verifying でのセルフレビュープロンプトを組み立てる。
 func Review(c Context) string { return render("review", c) }
+
+// Notice はワーカーが Issue に投稿する通知文の組み立てに必要な情報。
+type Notice struct {
+	Repo  string
+	Issue int
+}
+
+// PRNotFoundImplement は実装完了の報告後に PR を発見できなかった場合の Blocked 理由。
+func PRNotFoundImplement(n Notice) string { return render("pr_not_found_implement", n) }
+
+// PRNotFoundVerify は検証フェーズで PR を発見できなかった場合の Blocked 理由。
+func PRNotFoundVerify(n Notice) string { return render("pr_not_found_verify", n) }
 
 // TriageMode は triage プロンプトの動作モード。
 type TriageMode int

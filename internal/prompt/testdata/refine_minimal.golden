@@ -17,18 +17,29 @@ GitHub への書き込み（Issue 本文の更新・コメント投稿・PR 作�
    - ## 受け入れ条件（チェックリスト形式で、検証可能な粒度）
 3. 判断できない不明点があれば、本文は草案のまま残し、質問を `gh issue comment` で投稿する。
    憶測で仕様を決めないこと。
-4. 1 つの PR に収まらない規模だと判断した場合は、親 Issue に全体仕様をまとめ、
-   子 Issue を起票する。親 Issue 自体は実装対象にしない。
+4. 次のいずれかに当てはまる場合は、親 Issue に全体仕様をまとめ、子 Issue に分割する。
+   親 Issue 自体は実装対象にしない。
+   - 1 つの PR に収まらない規模である
+   - **実装先が k-wa-wa/example ではない、または複数のリポジトリに跨る**
+
+   Issue とそれを解決する PR は必ず同じリポジトリに置く決まりである。実装先が異なるなら
+   分割するしかない。**この Issue のまま他リポジトリの変更に着手してはならない**。
+
    子 Issue は 1 件ごとに次の 3 つをすべて行うこと。
-   - **親 Issue の sub-issue として登録する**。本文にリンクやチェックリストを書くだけでは
+   - **実装先のリポジトリに起票し、親 Issue の sub-issue として登録する**。sub-issue は
+     リポジトリを跨いで登録できる。本文にリンクやチェックリストを書くだけでは
      紐付いたことにならない。
    - **Project に追加する**。追加されていない子 Issue はワーカーから見えず、永久に
      着手されない。Status の設定は不要である（ワーカーが Inbox に載せて精緻化を開始する）。
      ```bash
-     CHILD_URL=$(gh issue create --title "<子Issueのタイトル>" --body "<子Issueの本文>")
+     # 実装先のリポジトリ。親と同じなら k-wa-wa/example を指定する。
+     CHILD_REPO=<owner/name>
+
+     CHILD_URL=$(gh issue create --repo "$CHILD_REPO" --title "<子Issueのタイトル>" --body "<子Issueの本文>")
 
      # sub_issue_id は Issue 番号ではなく内部 ID。番号を渡すと失敗する。
-     CHILD_ID=$(gh api "repos/k-wa-wa/example/issues/${CHILD_URL##*/}" --jq .id)
+     # 内部 ID は子 Issue 側、登録先は親 Issue 側であることに注意する。
+     CHILD_ID=$(gh api "repos/$CHILD_REPO/issues/${CHILD_URL##*/}" --jq .id)
      gh api "repos/k-wa-wa/example/issues/12/sub_issues" -F sub_issue_id="$CHILD_ID"
 
      gh project item-add 1 --owner k-wa-wa --url "$CHILD_URL"
