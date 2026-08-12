@@ -104,8 +104,12 @@ func (r *Runner) Run(ctx context.Context, s Spec, phase, workDir, prompt string)
 		timeout = 30 * time.Minute
 	}
 
+	// ログにもこれを書く。参照 UI で見えるプロンプトが実際に渡したものと
+	// 食い違うと、エージェントの挙動を追う手掛かりが失われるためである。
+	fullPrompt := applyCustomPrompt(prompt, s.CustomPrompt)
+
 	inv, err := adapter.Build(Request{
-		Prompt:    applyCustomPrompt(prompt, s.CustomPrompt),
+		Prompt:    fullPrompt,
 		Model:     s.Model,
 		ExtraArgs: s.ExtraArgs,
 		Timeout:   timeout,
@@ -136,7 +140,7 @@ func (r *Runner) Run(ctx context.Context, s Spec, phase, workDir, prompt string)
 		// プロンプトは別途まとめて出すため、引数側では伏せる。
 		fmt.Fprintf(logFile, "=== phase=%s adapter=%s cmd=%s %s dir=%s at=%s ===\n%s\n%s\n%s\n",
 			phase, adapter.Name(), command, strings.Join(inv.DisplayArgs(), " "),
-			workDir, time.Now().Format(time.RFC3339), LogPromptSep, prompt, LogOutputSep)
+			workDir, time.Now().Format(time.RFC3339), LogPromptSep, fullPrompt, LogOutputSep)
 	}
 
 	// ヘッダとプロンプトを書き終えてから通知する。参照側が読んだ時点で

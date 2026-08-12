@@ -33,9 +33,6 @@ const summaryMaxItems = 60
 // summaryRawLimit は解釈できなかった出力を保存する際の上限（バイト）。
 const summaryRawLimit = 32 * 1024
 
-// summaryHistoryLimit は参照 UI に返す履歴の件数。
-const summaryHistoryLimit = 20
-
 // scheduleSummaries は cron 式に従ってサマリ生成のジョブを投入する。
 //
 // summary.schedule が空なら何もしない。

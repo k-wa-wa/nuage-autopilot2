@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +67,35 @@ func TestRunPassesPromptOnStdin(t *testing.T) {
 	}
 	if !strings.Contains(res.Stdout, "こんにちは") {
 		t.Errorf("プロンプトが stdin に渡っていません: %q", res.Stdout)
+	}
+}
+
+// custom_prompt はエージェントに渡るだけでなく、ログにも同じものが残らなければ
+// ならない。参照 UI が実際と違うプロンプトを見せると挙動を追えなくなるためである。
+func TestRunLogsCustomPrompt(t *testing.T) {
+	r := New(t.TempDir(), nil)
+	a := Spec{Command: "cat", Timeout: 10 * time.Second, CustomPrompt: "日本語で書くこと"}
+	res, err := r.Run(context.Background(), a, "refine", t.TempDir(), "本体のプロンプト")
+	if err != nil {
+		t.Fatalf("Run に失敗: %v", err)
+	}
+	// cat なので stdout がそのまま実際に渡ったプロンプトになる。
+	if !strings.Contains(res.Stdout, "日本語で書くこと") {
+		t.Errorf("custom_prompt がエージェントに渡っていません: %q", res.Stdout)
+	}
+	body, err := os.ReadFile(res.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 出力側にも同じ文字列が現れるので、プロンプト欄だけを切り出して照合する。
+	head, _, ok := strings.Cut(string(body), "\n"+LogOutputSep+"\n")
+	if !ok {
+		t.Fatalf("ログに出力の区切りがありません: %q", body)
+	}
+	_, logged := splitPrompt(head)
+	if logged != strings.TrimRight(res.Stdout, "\n") {
+		t.Errorf("ログのプロンプトが実際に渡したものと違います:\nログ  = %q\n実際 = %q",
+			logged, res.Stdout)
 	}
 }
 
