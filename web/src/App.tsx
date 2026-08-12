@@ -1,8 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import type { StateResponse, ItemView, RunResponse, ItemResponse, LogView } from './types/api';
+import type {
+  StateResponse,
+  ItemView,
+  RunResponse,
+  ItemResponse,
+  LogView,
+  SummaryResponse,
+} from './types/api';
 import { api } from './api/client';
 import { TopBar } from './components/TopBar/TopBar';
 import { ActiveAgent } from './components/ActiveAgent/ActiveAgent';
+import { SummaryPanel } from './components/Summary/SummaryPanel';
 import { LaneList } from './components/LaneList/LaneList';
 import { ItemDetailModal } from './components/ItemDetail/ItemDetailModal';
 import { LogViewer } from './components/LogViewer/LogViewer';
@@ -20,6 +28,10 @@ export const App: React.FC = () => {
   const [targetItemKey, setTargetItemKey] = useState<{ repo: string; issue: number } | null>(null);
   const [itemDetail, setItemDetail] = useState<ItemResponse | null>(null);
   const [isLoadingRuns, setIsLoadingRuns] = useState(false);
+
+  // 人間向けサマリ（定期生成）
+  const [summary, setSummary] = useState<SummaryResponse | null>(null);
+  const [summaryId, setSummaryId] = useState<number | undefined>(undefined);
 
   // ログビューア用
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
@@ -60,6 +72,26 @@ export const App: React.FC = () => {
     const interval = setInterval(() => fetchState(false), 2000);
     return () => clearInterval(interval);
   }, [fetchState]);
+
+  // サマリの取得。cron 起動なので更新は稀であり、状態より長い間隔で足りる。
+  useEffect(() => {
+    let isCancelled = false;
+    const load = async () => {
+      try {
+        const res = await api.getSummary(summaryId);
+        if (!isCancelled) setSummary(res);
+      } catch (err) {
+        // サマリはパイプラインの表示に必須ではないので、失敗しても画面は出す。
+        console.error('Failed to fetch summary:', err);
+      }
+    };
+    load();
+    const interval = setInterval(load, 30000);
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [summaryId]);
 
   // ルートの解析
   useEffect(() => {
@@ -255,6 +287,12 @@ export const App: React.FC = () => {
         ) : (
           /* ダッシュボード (縦並びレーン & ActiveAgent) */
           <div className="space-y-4">
+            <SummaryPanel
+              summary={summary}
+              selectedId={summaryId}
+              onSelectHistory={setSummaryId}
+            />
+
             <ActiveAgent
               active={state?.active}
               queueDepth={state?.queue_depth ?? 0}

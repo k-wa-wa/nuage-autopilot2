@@ -122,6 +122,57 @@ func TestRuns(t *testing.T) {
 	}
 }
 
+func TestSummaries(t *testing.T) {
+	s := openTemp(t)
+
+	ids := make([]int64, 0, 3)
+	for i := 0; i < 3; i++ {
+		id, err := s.AddSummary(&Summary{RunID: int64(i + 1), Payload: `{"headline":"x"}`})
+		if err != nil || id == 0 {
+			t.Fatalf("AddSummary に失敗: id=%d err=%v", id, err)
+		}
+		ids = append(ids, id)
+	}
+
+	got, err := s.GetSummary(ids[1])
+	if err != nil || got == nil {
+		t.Fatalf("GetSummary に失敗: %v (got=%v)", err, got)
+	}
+	if got.RunID != 2 || got.Payload != `{"headline":"x"}` || got.CreatedAt.IsZero() {
+		t.Errorf("取得結果が不正: %+v", got)
+	}
+	if missing, err := s.GetSummary(999); err != nil || missing != nil {
+		t.Errorf("存在しない ID が nil になりません: %v %v", missing, err)
+	}
+
+	// 新しい順に返る。
+	list, err := s.ListSummaries(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || list[0].ID != ids[2] || list[1].ID != ids[1] {
+		t.Fatalf("一覧が不正: %+v", list)
+	}
+
+	if err := s.TrimSummaries(1); err != nil {
+		t.Fatal(err)
+	}
+	list, err = s.ListSummaries(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != ids[2] {
+		t.Fatalf("Trim 後が不正: %+v", list)
+	}
+	// keep が 0 以下なら何も消さない（誤って全消しにしないため）。
+	if err := s.TrimSummaries(0); err != nil {
+		t.Fatal(err)
+	}
+	if list, err = s.ListSummaries(10); err != nil || len(list) != 1 {
+		t.Fatalf("keep=0 で削除が走っています: %+v %v", list, err)
+	}
+}
+
 func TestRunHistory(t *testing.T) {
 	s := openTemp(t)
 

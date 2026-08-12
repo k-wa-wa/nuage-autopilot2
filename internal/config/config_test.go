@@ -116,15 +116,40 @@ func TestValidateRejectsUnknownAgentUse(t *testing.T) {
 }
 
 func TestSpecCarriesAgentSettings(t *testing.T) {
-	a := Agent{Command: "/opt/agy", Model: "m", Args: []string{"--x"}, Timeout: time.Minute}
+	a := Agent{Command: "/opt/agy", Model: "m", Args: []string{"--x"}, Timeout: time.Minute, CustomPrompt: "追加指示"}
 	s := a.Spec()
 	if s.ResolvedCommand() != "/opt/agy" || s.Model != "m" ||
 		len(s.ExtraArgs) != 1 || s.Timeout != time.Minute {
 		t.Errorf("Spec への変換が不正: %+v", s)
 	}
+	if s.CustomPrompt != "追加指示" {
+		t.Errorf("CustomPrompt が Spec に伝播していません: %q", s.CustomPrompt)
+	}
 	// command からアダプタが解決されること。
 	if got := s.Adapter().Name(); got != "agy" {
 		t.Errorf("解決されたアダプタ = %s, want agy", got)
+	}
+}
+
+// YAML から custom_prompt が読めること。
+func TestLoadReadsCustomPrompt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yaml")
+	body := "project:\n  owner: o\n  number: 1\nrepos:\n  - owner: o\n    name: r\nagents:\n  implement:\n    custom_prompt: \"必ず日本語のコミットメッセージを書くこと\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load に失敗: %v", err)
+	}
+	got := c.AgentFor(AgentImplement).CustomPrompt
+	if got != "必ず日本語のコミットメッセージを書くこと" {
+		t.Errorf("custom_prompt = %q", got)
+	}
+	// 未指定の用途は空のままであること。
+	if got := c.AgentFor(AgentReview).CustomPrompt; got != "" {
+		t.Errorf("未指定の review に custom_prompt が設定されています: %q", got)
 	}
 }
 
@@ -186,5 +211,63 @@ func TestLoadReadsWebAddr(t *testing.T) {
 	}
 	if got := c.Web.Listen(); got != "127.0.0.1:9999" {
 		t.Errorf("web.addr = %q", got)
+	}
+}
+
+// summary.schedule が読め、cron 式として解釈できること。
+func TestLoadReadsSummarySchedule(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yaml")
+	body := "project:\n  owner: o\n  number: 1\nrepos:\n  - owner: o\n    name: r\n" +
+		"summary:\n  schedule: \"0 9 * * 1-5\"\n  keep: 5\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load に失敗: %v", err)
+	}
+	if c.Summary.Keep != 5 {
+		t.Errorf("summary.keep = %d", c.Summary.Keep)
+	}
+	sched, err := c.Summary.Cron()
+	if err != nil || sched == nil {
+		t.Fatalf("cron 式を解釈できません: %v", err)
+	}
+	if got := sched.Next(time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)); got.Hour() != 9 {
+		t.Errorf("次回実行が %s", got)
+	}
+}
+
+// 未指定なら定期生成は無効で、保持件数だけ既定が入る。
+func TestSummaryDefaults(t *testing.T) {
+	c, err := Load(examplePath(t))
+	if err != nil {
+		t.Fatalf("読み込みに失敗: %v", err)
+	}
+	if c.Summary.Keep != DefaultSummaryKeep {
+		t.Errorf("summary.keep = %d, want %d", c.Summary.Keep, DefaultSummaryKeep)
+	}
+	sched, err := c.Summary.Cron()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Summary.Schedule == "" && sched != nil {
+		t.Error("空の schedule でスケジュールが作られています")
+	}
+}
+
+// 壊れた cron 式は起動前に弾く。
+func TestValidateRejectsBadSummarySchedule(t *testing.T) {
+	c := &Config{
+		Project: Project{Owner: "o", Number: 1},
+		Repos:   []Repo{{Owner: "o", Name: "r"}},
+		Summary: Summary{Schedule: "毎朝 9 時"},
+	}
+	if err := c.applyDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.validate(); err == nil || !strings.Contains(err.Error(), "summary.schedule") {
+		t.Errorf("不正な cron 式が通っています: %v", err)
 	}
 }

@@ -84,8 +84,9 @@ export const LogViewer: React.FC<LogViewerProps> = ({
               <span className="uppercase font-mono bg-[#21262d] border border-[#30363d] px-1.5 py-0.2 rounded text-[11px] text-[#c9d1d9] font-semibold">
                 {run.phase}
               </span>
+              {/* サマリ生成は特定の Issue に紐づかないため repo を持たない。 */}
               <span className="font-mono text-xs sm:text-sm text-[#c9d1d9] truncate max-w-[200px]">
-                {run.repo} #{run.issue}
+                {run.repo ? `${run.repo} #${run.issue}` : 'パイプライン全体'}
               </span>
               <RunBadge run={run} />
             </div>

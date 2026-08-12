@@ -31,6 +31,9 @@ type Spec struct {
 	Env map[string]string
 	// Timeout はワーカーが課す 1 回あたりの上限。
 	Timeout time.Duration
+	// CustomPrompt はテンプレートが生成したプロンプトの末尾に追記するカスタムテキスト。
+	// エージェントのくせや追加指示を用途ごとに差し込みたい場合に使う。
+	CustomPrompt string
 }
 
 // ResolvedCommand は実際に起動するコマンドを返す。

@@ -37,6 +37,16 @@ statuses:
 web:
   addr: "127.0.0.1:8787"
 
+# パイプラインの TODO 定期サマリ。
+#
+# cron 式（分 時 日 月 曜日）で指定した時刻に、パイプラインの現況を読んで
+# 対応が必要な TODO と推奨対応をまとめ、参照 UI に表示する。
+# GitHub への書き込みは行わない（読み取り専用のエージェントである）。
+# schedule を省略・空文字にすると生成しない。
+summary:
+  # schedule: "0 9 * * 1-5" # 平日 9:00
+  keep: 30 # 保持する生成結果の件数
+
 poll:
   project_interval: 60s # Ready への移動を検知する（通知では拾えない）
   notification_interval: 60s # X-Poll-Interval がこれより長ければそちらに従う
@@ -62,15 +72,26 @@ limits:
 #
 # パス指定（/home/nixos/.local/bin/agy など）でもコマンド名で判定する。
 # 省略した用途は claude になる。
+#
+# custom_prompt: テンプレートが生成したプロンプトの末尾に追記するテキスト。
+# エージェントのくせや役割（使用言語・コミットスタイルなど）を用途ごとに指定できる。
 agents:
   refine:
     command: claude
   implement:
     command: claude
+    # custom_prompt: |
+    #   必ず日本語のコミットメッセージを書いてください。
   review:
     command: agy
     # model: gemini-3.6-flash-high
+    # custom_prompt: |
+    #   あなたは Gemini です。日本語でレビューコメントを書いてください。
   triage:
+    command: claude
+  # summarize は summary.schedule を設定したときだけ動く。読み取り専用の報告役なので、
+  # 実装用より安いモデルで十分なことが多い。
+  summarize:
     command: claude
 # 全エージェントに渡す追加の環境変数。
 # env:

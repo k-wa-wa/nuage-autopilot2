@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"nuage-autopilot2/internal/engine"
 	"nuage-autopilot2/internal/gh"
 	"nuage-autopilot2/internal/store"
+	"nuage-autopilot2/internal/summary"
 	"nuage-autopilot2/internal/workspace"
 )
 
@@ -33,6 +35,7 @@ const usage = `autopilot - 自動開発パイプラインの常駐ワーカー
   run             常駐してパイプラインを回す
   init            コールドスタートのシードを行う（現在を処理済みとして記録する）
   status          ローカル状態を一覧表示する
+  summarize       TODOサマリをその場で 1 回生成する（定期実行の確認用）
   doctor          設定と前提条件を検証して終了する
   setup-project   GitHub Projects v2 に 7 つの Status 選択肢を設定・修復する
 
@@ -91,6 +94,8 @@ func run() error {
 		return cmdInit(ctx, cfg, log)
 	case "status":
 		return cmdStatus(ctx, cfg, log)
+	case "summarize":
+		return cmdSummarize(ctx, cfg, log)
 	case "doctor":
 		return cmdDoctor(ctx, cfg, log)
 	case "setup-project":
@@ -174,6 +179,48 @@ func cmdStatus(ctx context.Context, cfg *config.Config, log *slog.Logger) error 
 	return w.Flush()
 }
 
+// cmdSummarize はサマリを 1 回だけ生成する。
+//
+// 定期実行を待たずにプロンプトと出力を確かめられるようにするためのコマンドである。
+// 生成結果は run と同じ DB に入るので、そのまま参照 UI で表示される。
+func cmdSummarize(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	e, err := engine.New(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer e.Close()
+
+	sum, err := e.RunSummaryNow(ctx)
+	if err != nil {
+		return err
+	}
+	if sum == nil {
+		return errors.New("サマリを保存できませんでした")
+	}
+	if sum.Payload == "" {
+		fmt.Println("（JSON として解釈できなかったため、生の出力を表示します）")
+		fmt.Println(sum.Raw)
+		return nil
+	}
+
+	var report summary.Report
+	if err := json.Unmarshal([]byte(sum.Payload), &report); err != nil {
+		return err
+	}
+	fmt.Printf("# %s\n\n", report.Headline)
+	for _, t := range report.Todos {
+		target := ""
+		if t.Repo != "" && t.Issue != 0 {
+			target = fmt.Sprintf(" (%s#%d)", t.Repo, t.Issue)
+		}
+		fmt.Printf("- [%s] %s%s\n    なぜ: %s\n    対応: %s\n", t.Urgency, t.Title, target, t.Why, t.Action)
+	}
+	if report.Notes != "" {
+		fmt.Printf("\n%s\n", report.Notes)
+	}
+	return nil
+}
+
 func cmdDoctor(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	hasError := false
 
@@ -232,6 +279,17 @@ func cmdDoctor(ctx context.Context, cfg *config.Config, log *slog.Logger) error 
 		fmt.Printf("✓ 参照 UI: http://%s（参照専用）\n", addr)
 	} else {
 		fmt.Printf("… 参照 UI: 無効（web.addr が空）\n")
+	}
+
+	// cron 式は設定の検証を通っているので、ここでは次回時刻の確認に使う。
+	if sched, err := cfg.Summary.Cron(); err != nil {
+		fmt.Printf("✗ サマリ生成: %v\n", err)
+		hasError = true
+	} else if sched == nil {
+		fmt.Printf("… サマリ生成: 無効（summary.schedule が空）\n")
+	} else {
+		fmt.Printf("✓ サマリ生成: %s（次回 %s）\n",
+			sched.String(), sched.Next(time.Now()).Format(time.RFC3339))
 	}
 
 	for _, use := range config.AgentUses {

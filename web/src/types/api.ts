@@ -84,6 +84,50 @@ export interface RunResponse {
   log_error?: string;
 }
 
+// 人間がやるべきことの定期サマリ
+
+export type Urgency = 'high' | 'medium' | 'low';
+
+export interface SummaryTodo {
+  repo: string;
+  issue: number;
+  title: string;
+  status: string;
+  urgency: Urgency;
+  why: string;
+  action: string;
+}
+
+export interface SummaryReport {
+  headline: string;
+  todos: SummaryTodo[] | null;
+  notes: string;
+}
+
+export interface SummaryView {
+  id: number;
+  created_at: string;
+  run_id: number;
+  // report は出力を JSON として解釈できた場合のみ入る。読めなかった場合は raw に生の出力が入る。
+  report: SummaryReport | null;
+  raw: string;
+}
+
+export interface SummaryMeta {
+  id: number;
+  created_at: string;
+  headline: string;
+  todo_count: number;
+}
+
+export interface SummaryResponse {
+  // schedule が空文字なら定期生成は無効。
+  schedule: string;
+  next_at: string | null;
+  current: SummaryView | null;
+  history: SummaryMeta[];
+}
+
 export interface LogChunkResponse {
   data: string;
   next: number;

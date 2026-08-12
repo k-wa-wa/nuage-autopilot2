@@ -623,6 +623,12 @@ func (e *Engine) promptContext(ctx context.Context, it *store.Item, inputs []str
 
 // runJob はエージェントを 1 回起動し、結果に応じて状態を遷移させる。
 func (e *Engine) runJob(ctx context.Context, j Job) {
+	// サマリ生成は特定の Issue に紐づかず、状態遷移も持たない（summary.go を参照）。
+	if j.Phase == PhaseSummarize {
+		_ = e.runSummary(ctx, j)
+		return
+	}
+
 	it, err := e.load(j.Repo, j.Issue)
 	if err != nil || it == nil {
 		e.log.Error("ジョブ対象の状態を読めません", "repo", j.Repo, "issue", j.Issue, "err", err)

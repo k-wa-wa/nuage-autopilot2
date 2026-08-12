@@ -19,11 +19,15 @@ import (
 
 // fakeSource は Source をメモリ上で満たすテスト用の実装。
 type fakeSource struct {
-	items  []*store.Item
-	runs   []*store.Run
-	active *Active
-	logDir string
-	queue  int
+	items     []*store.Item
+	runs      []*store.Run
+	active    *Active
+	logDir    string
+	queue     int
+	summaries []*store.Summary
+	// summarySchedule は cron 式と次回予定。空なら定期生成が無効な状態を表す。
+	summarySchedule string
+	summaryNext     time.Time
 }
 
 func (f *fakeSource) Meta() Meta {
@@ -71,6 +75,23 @@ func (f *fakeSource) GetRun(id int64) (*store.Run, error) {
 func (f *fakeSource) Active() *Active { return f.active }
 func (f *fakeSource) QueueDepth() int { return f.queue }
 func (f *fakeSource) LogDir() string  { return f.logDir }
+func (f *fakeSource) Summaries(limit int) ([]*store.Summary, error) {
+	if len(f.summaries) > limit {
+		return f.summaries[:limit], nil
+	}
+	return f.summaries, nil
+}
+func (f *fakeSource) GetSummary(id int64) (*store.Summary, error) {
+	for _, s := range f.summaries {
+		if s.ID == id {
+			return s, nil
+		}
+	}
+	return nil, nil
+}
+func (f *fakeSource) SummarySchedule() (string, time.Time) {
+	return f.summarySchedule, f.summaryNext
+}
 
 func newTestServer(t *testing.T) (*httptest.Server, *fakeSource) {
 	t.Helper()
@@ -162,6 +183,64 @@ func TestStateGroupsItemsAndRuns(t *testing.T) {
 	// ゼロ値の時刻は null になること。
 	if first.LeaseUntil != nil {
 		t.Errorf("未設定の時刻が null になっていません: %v", first.LeaseUntil)
+	}
+}
+
+func TestSummaryEndpoint(t *testing.T) {
+	srv, src := newTestServer(t)
+	next := time.Now().Add(time.Hour).Truncate(time.Second)
+	src.summarySchedule = "0 9 * * *"
+	src.summaryNext = next
+	src.summaries = []*store.Summary{
+		{ID: 2, CreatedAt: time.Now(), RunID: 9,
+			Payload: `{"headline":"対応待ち 1 件","todos":[{"repo":"o/r","issue":1,"title":"レビューする","urgency":"high"}]}`},
+		{ID: 1, CreatedAt: time.Now().Add(-24 * time.Hour), Raw: "JSON になっていない出力"},
+	}
+
+	// 既定では最新を返す。
+	var got summaryResponse
+	if code := get(t, srv, "/api/summary", &got); code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if got.Schedule != "0 9 * * *" || got.NextAt == nil || !got.NextAt.Equal(next) {
+		t.Errorf("スケジュールが反映されていません: %+v", got)
+	}
+	if got.Current == nil || got.Current.ID != 2 || got.Current.Report == nil {
+		t.Fatalf("最新のサマリが返っていません: %+v", got.Current)
+	}
+	if got.Current.Report.Headline != "対応待ち 1 件" || len(got.Current.Report.Todos) != 1 {
+		t.Errorf("中身が不正: %+v", got.Current.Report)
+	}
+	if len(got.History) != 2 || got.History[0].ID != 2 || got.History[0].TodoCount != 1 {
+		t.Errorf("履歴が不正: %+v", got.History)
+	}
+
+	// id を指定すれば履歴の 1 件を返す。JSON として読めなかったものは生の出力で返す。
+	var old summaryResponse
+	if code := get(t, srv, "/api/summary?id=1", &old); code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if old.Current == nil || old.Current.Report != nil || old.Current.Raw == "" {
+		t.Errorf("解釈できなかったサマリの返し方が不正: %+v", old.Current)
+	}
+
+	if code := get(t, srv, "/api/summary?id=999", nil); code != http.StatusNotFound {
+		t.Errorf("存在しない id が %d", code)
+	}
+	if code := get(t, srv, "/api/summary?id=abc", nil); code != http.StatusBadRequest {
+		t.Errorf("不正な id が %d", code)
+	}
+}
+
+// 生成が一度も行われていない状態でも、スケジュールだけは返す。
+func TestSummaryEndpointEmpty(t *testing.T) {
+	srv, _ := newTestServer(t)
+	var got summaryResponse
+	if code := get(t, srv, "/api/summary", &got); code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if got.Current != nil || len(got.History) != 0 || got.Schedule != "" || got.NextAt != nil {
+		t.Errorf("空の状態の返し方が不正: %+v", got)
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 
 	"nuage-autopilot2/internal/agent"
 	"nuage-autopilot2/internal/store"
+	"nuage-autopilot2/internal/summary"
 )
 
 // assets 直下にはリポジトリで追跡する placeholder.html だけを置き、
@@ -93,6 +94,12 @@ type Source interface {
 	QueueDepth() int
 	// LogDir はログファイルの置き場。この配下以外は読み出さない。
 	LogDir() string
+	// Summaries は生成済みの人間向けサマリを新しい順に返す。
+	Summaries(limit int) ([]*store.Summary, error)
+	GetSummary(id int64) (*store.Summary, error)
+	// SummarySchedule は cron 式と次回の生成予定時刻を返す。
+	// 生成が無効なら空文字とゼロ値。
+	SummarySchedule() (string, time.Time)
 }
 
 // Server は参照専用の HTTP サーバ。
@@ -118,6 +125,7 @@ func New(src Source, log *slog.Logger) *Server {
 	s.mux.HandleFunc("/api/item", s.jsonHandler(s.handleItem))
 	s.mux.HandleFunc("/api/run", s.jsonHandler(s.handleRun))
 	s.mux.HandleFunc("/api/run/log", s.jsonHandler(s.handleRunLog))
+	s.mux.HandleFunc("/api/summary", s.jsonHandler(s.handleSummary))
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
@@ -467,6 +475,101 @@ func (s *Server) handleRunLog(r *http.Request) (any, error) {
 		Data: c.Data, Next: c.Next, Size: c.Size, Skipped: c.Skipped,
 		Running: active != nil && active.RunID == run.ID,
 	}, nil
+}
+
+// summaryView は 1 回のサマリ生成の結果。
+//
+// Report が nil のときだけ Raw に生の出力が入る（JSON として読めなかった場合）。
+// 生成に費やした時間を無駄にせず、人間が自分で読めるようにするための逃げ道である。
+type summaryView struct {
+	ID        int64           `json:"id"`
+	CreatedAt time.Time       `json:"created_at"`
+	RunID     int64           `json:"run_id"`
+	Report    *summary.Report `json:"report"`
+	Raw       string          `json:"raw"`
+}
+
+// summaryMeta は履歴の 1 行。中身は開くまで送らない。
+type summaryMeta struct {
+	ID        int64     `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Headline  string    `json:"headline"`
+	TodoCount int       `json:"todo_count"`
+}
+
+type summaryResponse struct {
+	// Schedule は cron 式。空なら定期生成は無効。
+	Schedule string     `json:"schedule"`
+	NextAt   *time.Time `json:"next_at"`
+	// Current は表示対象。id を指定しなければ最新。1 件も無ければ null。
+	Current *summaryView  `json:"current"`
+	History []summaryMeta `json:"history"`
+}
+
+// handleSummary は人間向けサマリを返す。id を指定すると履歴の 1 件を返す。
+func (s *Server) handleSummary(r *http.Request) (any, error) {
+	schedule, next := s.src.SummarySchedule()
+	resp := summaryResponse{Schedule: schedule, NextAt: timePtr(next), History: []summaryMeta{}}
+
+	list, err := s.src.Summaries(summaryHistoryLimit)
+	if err != nil {
+		return nil, err
+	}
+	for _, sum := range list {
+		report, _ := decodeSummary(sum)
+		meta := summaryMeta{ID: sum.ID, CreatedAt: sum.CreatedAt}
+		if report != nil {
+			meta.Headline = report.Headline
+			meta.TodoCount = len(report.Todos)
+		}
+		resp.History = append(resp.History, meta)
+	}
+
+	current := (*store.Summary)(nil)
+	if raw := r.URL.Query().Get("id"); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return nil, badRequest("id は数値で指定してください")
+		}
+		current, err = s.src.GetSummary(id)
+		if err != nil {
+			return nil, err
+		}
+		if current == nil {
+			return nil, notFound("サマリ %d は見つかりません", id)
+		}
+	} else if len(list) > 0 {
+		current = list[0]
+	}
+	if current != nil {
+		report, rawOut := decodeSummary(current)
+		resp.Current = &summaryView{
+			ID:        current.ID,
+			CreatedAt: current.CreatedAt,
+			RunID:     current.RunID,
+			Report:    report,
+			Raw:       rawOut,
+		}
+	}
+	return resp, nil
+}
+
+// summaryHistoryLimit は履歴として返す件数。
+const summaryHistoryLimit = 20
+
+// decodeSummary は保存済みのサマリを描画用に開く。
+//
+// 壊れた payload でも 500 にはしない。参照 UI が読めなくなるより、
+// 生の出力を見せて人間に判断させる方がよい。
+func decodeSummary(sum *store.Summary) (*summary.Report, string) {
+	if sum.Payload == "" {
+		return nil, sum.Raw
+	}
+	var report summary.Report
+	if err := json.Unmarshal([]byte(sum.Payload), &report); err != nil {
+		return nil, sum.Payload
+	}
+	return &report, ""
 }
 
 func (s *Server) lookupRun(r *http.Request) (*store.Run, error) {

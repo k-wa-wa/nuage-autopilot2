@@ -39,6 +39,19 @@ type Item struct {
 	ReconciledAt time.Time
 }
 
+// Summary は 1 回のサマリ生成の結果。
+//
+// Payload は構造化された JSON（web と共有する形式）で、UI はこれを描画する。
+// エージェントの出力が JSON として読めなかった場合は Payload が空になり、
+// Raw だけが残る。生成物を捨てずに人間が読めるようにするための保険である。
+type Summary struct {
+	ID        int64
+	CreatedAt time.Time
+	RunID     int64
+	Payload   string
+	Raw       string
+}
+
 // Run は 1 回のエージェント実行の記録。
 //
 // EndedAt がゼロ値なら実行中か、ワーカーが異常終了して取り残されたかのどちらか。
@@ -86,6 +99,14 @@ CREATE TABLE IF NOT EXISTS runs (
   ended_at     INTEGER NOT NULL DEFAULT 0,
   result       TEXT    NOT NULL DEFAULT '',
   log_path     TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS summaries (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL,
+  run_id     INTEGER NOT NULL DEFAULT 0,
+  payload    TEXT    NOT NULL DEFAULT '',
+  raw        TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_item ON runs(repo, issue_number);
@@ -348,6 +369,69 @@ func (s *Store) queryRuns(query string, args ...any) ([]*Run, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+const summaryColumns = `id, created_at, run_id, payload, raw`
+
+// AddSummary は生成結果を保存し、その ID を返す。
+func (s *Store) AddSummary(sum *Summary) (int64, error) {
+	res, err := s.db.Exec(`INSERT INTO summaries (created_at, run_id, payload, raw) VALUES (?, ?, ?, ?)`,
+		time.Now().Unix(), sum.RunID, sum.Payload, sum.Raw)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ListSummaries は生成結果を新しい順に返す。
+func (s *Store) ListSummaries(limit int) ([]*Summary, error) {
+	rows, err := s.db.Query(`SELECT `+summaryColumns+` FROM summaries ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Summary
+	for rows.Next() {
+		sum, err := scanSummary(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sum)
+	}
+	return out, rows.Err()
+}
+
+// GetSummary は 1 件取得する。存在しない場合は (nil, nil)。
+func (s *Store) GetSummary(id int64) (*Summary, error) {
+	row := s.db.QueryRow(`SELECT `+summaryColumns+` FROM summaries WHERE id = ?`, id)
+	sum, err := scanSummary(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return sum, err
+}
+
+// TrimSummaries は新しい keep 件を残して古い生成結果を削除する。
+//
+// runs と違ってサマリは全文を抱えるため、放置すると DB が単調に膨らむ。
+// 過去のサマリは参照されないので、件数で頭打ちにする。
+func (s *Store) TrimSummaries(keep int) error {
+	if keep <= 0 {
+		return nil
+	}
+	_, err := s.db.Exec(`DELETE FROM summaries WHERE id NOT IN (
+		SELECT id FROM summaries ORDER BY id DESC LIMIT ?)`, keep)
+	return err
+}
+
+func scanSummary(r scanner) (*Summary, error) {
+	var sum Summary
+	var created int64
+	if err := r.Scan(&sum.ID, &created, &sum.RunID, &sum.Payload, &sum.Raw); err != nil {
+		return nil, err
+	}
+	sum.CreatedAt = timeOrZero(created)
+	return &sum, nil
 }
 
 func scanRun(r scanner) (*Run, error) {

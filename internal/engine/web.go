@@ -156,5 +156,21 @@ func (e *Engine) Active() *web.Active {
 // QueueDepth は投入済みでまだ処理されていないジョブの数を返す。
 func (e *Engine) QueueDepth() int { return len(e.jobs) }
 
+// Summaries は生成済みの人間向けサマリを新しい順に返す。
+func (e *Engine) Summaries(limit int) ([]*store.Summary, error) { return e.st.ListSummaries(limit) }
+
+// GetSummary はサマリを 1 件返す。
+func (e *Engine) GetSummary(id int64) (*store.Summary, error) { return e.st.GetSummary(id) }
+
+// SummarySchedule は cron 式と次回の生成予定時刻を返す。無効なら空文字とゼロ値。
+func (e *Engine) SummarySchedule() (string, time.Time) {
+	if e.summaryCron == nil {
+		return "", time.Time{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.summaryCron.String(), e.summaryNext
+}
+
 // LogDir はエージェントのログの置き場を返す。
 func (e *Engine) LogDir() string { return e.runner.LogDir() }

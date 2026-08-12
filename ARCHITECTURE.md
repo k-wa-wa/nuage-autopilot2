@@ -93,6 +93,8 @@ items(
 cursors(name TEXT PRIMARY KEY, value TEXT)  -- notifications since 等
 
 runs(id, issue_number, phase, started_at, ended_at, result, log_path)  -- 実行ログ
+
+summaries(id, created_at, run_id, payload, raw)  -- 人間向けサマリ（§10）
 ```
 
 `log_path` はエージェントの出力ファイルの位置で、参照 UI（§8）が実行後に
@@ -178,7 +180,7 @@ PR 作成直後は timeline への反映にラグがあるため、数回リト�
 
 ### 4.5 エージェントの起動
 
-用途は 4 つあり、それぞれ独立に CLI を差し替えられる。
+用途は 5 つあり、それぞれ独立に CLI を差し替えられる。
 
 | 用途 | 役割 | タイムアウト既定 |
 |---|---|---|
@@ -186,6 +188,7 @@ PR 作成直後は timeline への反映にラグがあるため、数回リト�
 | `implement` | 実装・テスト・PR 作成 | 2h |
 | `review` | セルフレビューと品質ゲート検証 | 30m |
 | `triage` | レビュー指摘 / 助言コメントの判断 | 30m |
+| `summarize` | 人間の対応待ちの要約（§10） | 30m |
 
 超過時はプロセスを終了し `Blocked` へ送る。
 
@@ -237,6 +240,7 @@ diff のインラインコメントを問わず、すべて行動の要求とみ
 | `autopilot run` | 常駐してパイプラインを回す |
 | `autopilot init` | コールドスタートのシード（現在を処理済みとして記録） |
 | `autopilot status` | ローカル状態の一覧表示 |
+| `autopilot summarize` | TODOサマリを 1 回生成する（§10） |
 | `autopilot doctor` | 設定・トークン・Status 名・エージェントコマンド・clone の検証 |
 
 `run` は goroutine を分けた常駐構成をとる。ループごとに周期も API も異なるため、
@@ -250,6 +254,7 @@ diff のインラインコメントを問わず、すべて行動の要求とみ
 | reconciler | 通知の取りこぼしの自己修復 |
 | dispatcher | イベントを受けて状態遷移とジョブ投入（短時間処理のみ） |
 | agent-worker | **エージェント起動を直列に処理する唯一の goroutine** |
+| summary-scheduler | 定時にサマリ生成のジョブを投入する（§10）。無効なら起動しない |
 | web | 参照 UI の HTTP 待ち受け（§8）。パイプラインの判断には関与しない |
 
 `In Progress` の直列性は agent-worker が 1 本であることで保証される。
@@ -274,3 +279,8 @@ diff のインラインコメントを問わず、すべて行動の要求とみ
   一旦「飛ばない」前提とする。飛ぶ場合でも親 Issue は Inbox で refine が走るだけなので致命的ではない。
 - **コスト上限**: 現状はタイムアウトのみで、トークン量による打ち切りは持っていない。
 - **複数インスタンス**: 単一インスタンス前提。起動時の孤児回収がこの前提に依存している。
+
+## 10. TODO の定期サマリ
+
+`summary.schedule`（cron 式）で指定した時刻に読み取り専用エージェントを直列キュー（`agent-worker`）経由で 1 回起動し、対応待ちの TODO と推奨対応を要約して UI から参照できるようにする。
+GitHub への書き込みやパイプラインの Status 遷移は一切行わず、失敗時もレーンを止めずに次回を待つ。

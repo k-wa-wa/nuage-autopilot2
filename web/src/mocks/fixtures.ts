@@ -1,4 +1,10 @@
-import type { StateResponse, ItemResponse, RunResponse, LogChunkResponse } from '../types/api';
+import type {
+  StateResponse,
+  ItemResponse,
+  RunResponse,
+  LogChunkResponse,
+  SummaryResponse,
+} from '../types/api';
 
 export const mockMeta = {
   login: 'k-wa-wa',
@@ -216,4 +222,91 @@ export const mockLogChunk: LogChunkResponse = {
   size: 2150,
   skipped: false,
   running: true,
+};
+
+export const mockSummary: SummaryResponse = {
+  schedule: '0 9 * * 1-5',
+  next_at: new Date(Date.now() + 6 * 3600 * 1000).toISOString(),
+  current: {
+    id: 12,
+    created_at: new Date(Date.now() - 3600 * 1000).toISOString(),
+    run_id: 120,
+    report: {
+      headline: '対応待ち 3 件。うち 1 件は 2 日以上放置されている。',
+      todos: [
+        {
+          repo: 'k-wa-wa/pechka',
+          issue: 38,
+          title: 'Blocked の助言を返す',
+          status: '⏸ Blocked',
+          urgency: 'high',
+          why: 'CI のテストが 5 回連続で落ち、エージェントが自力で直せずに 2 日止まっている。',
+          action: '失敗ログを確認し、モックしてよい範囲をコメントで指示する。',
+        },
+        {
+          repo: 'k-wa-wa/pechka',
+          issue: 42,
+          title: 'PR をレビューする',
+          status: '👀 In Review',
+          urgency: 'medium',
+          why: '品質ゲートを通過して最終レビュー・マージ判断を待っている。',
+          action: 'PR #12 を確認し、Approve & Merge する。',
+        },
+        {
+          repo: 'k-wa-wa/nuage-cluster',
+          issue: 7,
+          title: '仕様の質問に答える',
+          status: '📥 Inbox',
+          urgency: 'low',
+          why: 'エージェントが監視対象ホストの範囲を確認するコメントを投稿している。',
+          action: 'コメントで回答すると、精緻化が再開される。',
+        },
+      ],
+      notes: '他 4 件は Verifying / In Progress で自走中。',
+    },
+    raw: '',
+  },
+  history: [
+    {
+      id: 12,
+      created_at: new Date(Date.now() - 3600 * 1000).toISOString(),
+      headline: '対応待ち 3 件。うち 1 件は 2 日以上放置されている。',
+      todo_count: 3,
+    },
+    {
+      id: 11,
+      created_at: new Date(Date.now() - 25 * 3600 * 1000).toISOString(),
+      headline: '対応待ちなし。すべて自走中。',
+      todo_count: 0,
+    },
+  ],
+};
+
+// 対応が要らない状態。
+export const mockSummaryQuiet: SummaryResponse = {
+  ...mockSummary,
+  current: {
+    id: 11,
+    created_at: new Date(Date.now() - 25 * 3600 * 1000).toISOString(),
+    run_id: 110,
+    report: {
+      headline: '対応待ちなし。すべて自走中。',
+      todos: [],
+      notes: '',
+    },
+    raw: '',
+  },
+};
+
+// 出力を JSON として解釈できなかった場合。
+export const mockSummaryUnparsable: SummaryResponse = {
+  ...mockSummary,
+  current: {
+    id: 10,
+    created_at: new Date(Date.now() - 49 * 3600 * 1000).toISOString(),
+    run_id: 100,
+    report: null,
+    raw: 'すみません、状況をうまくまとめられませんでした。',
+  },
+  history: [],
 };

@@ -1,4 +1,10 @@
-import type { StateResponse, ItemResponse, RunResponse, LogChunkResponse } from '../types/api';
+import type {
+  StateResponse,
+  ItemResponse,
+  RunResponse,
+  LogChunkResponse,
+  SummaryResponse,
+} from '../types/api';
 
 // 接続先サーバのベース URL (未指定時は同一オリジン / 相対パス)
 function getBaseUrl(): string {
@@ -34,4 +40,8 @@ export const api = {
 
   getRunLogChunk: (id: number, offset: number): Promise<LogChunkResponse> =>
     fetchJSON<LogChunkResponse>(`/api/run/log?id=${id}&offset=${offset}`),
+
+  // id を省略すると最新のサマリを返す。
+  getSummary: (id?: number): Promise<SummaryResponse> =>
+    fetchJSON<SummaryResponse>(id ? `/api/summary?id=${id}` : '/api/summary'),
 };
