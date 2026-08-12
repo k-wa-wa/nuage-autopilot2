@@ -54,6 +54,7 @@ const maxTodos = 20
 //
 // CLI によっては JSON の前後に説明文が付くため、```json フェンス、
 // 次いで最も外側の {...} の順に探す。
+// 中身の無いものはエラーとして返し、呼び出し側に生の出力を残させる。
 func Parse(out string) (*Report, error) {
 	raw, err := extractJSON(out)
 	if err != nil {
@@ -64,6 +65,12 @@ func Parse(out string) (*Report, error) {
 		return nil, fmt.Errorf("サマリの JSON を解釈できません: %w", err)
 	}
 	r.normalize()
+	// JSON として読めても Report とは限らない。無関係な JSON を通すと
+	// 「対応不要」と区別が付かず、生成の失敗が静かな誤報に化ける。
+	// レポートを名乗るなら少なくとも 1 つは中身があるはずである。
+	if r.Headline == "" && len(r.Todos) == 0 && r.Notes == "" {
+		return nil, fmt.Errorf("サマリの JSON に headline / todos / notes のいずれも含まれていません")
+	}
 	return &r, nil
 }
 

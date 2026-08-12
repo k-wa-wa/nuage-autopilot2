@@ -55,10 +55,29 @@ func TestParseBare(t *testing.T) {
 }
 
 func TestParseErrors(t *testing.T) {
-	for _, out := range []string{"", "JSON はありません", "```json\n{壊れている\n```"} {
+	for _, out := range []string{
+		"", "JSON はありません", "```json\n{壊れている\n```",
+		// JSON として読めても Report でないものは通さない。通すと
+		// 「対応不要」と見分けが付かず、失敗が静かな誤報になる。
+		`{"foo": 1}`,
+		`{"headline": "", "todos": [], "notes": ""}`,
+		// 中身の無い TODO は normalize で落ちるので、これも実質空である。
+		`{"headline": "", "todos": [{"why": "説明だけ"}]}`,
+	} {
 		if _, err := Parse(out); err == nil {
 			t.Errorf("Parse(%q) はエラーになるべきです", out)
 		}
+	}
+}
+
+// 対応不要の報告は正当なので、todos が空でも headline があれば通す。
+func TestParseAcceptsQuietReport(t *testing.T) {
+	r, err := Parse(`{"headline": "対応待ちなし。すべて自走中。", "todos": []}`)
+	if err != nil {
+		t.Fatalf("正当な「対応不要」がエラーになっています: %v", err)
+	}
+	if r.Headline == "" || len(r.Todos) != 0 {
+		t.Errorf("想定外の解釈: %+v", r)
 	}
 }
 

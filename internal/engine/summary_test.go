@@ -109,6 +109,37 @@ echo "うまく答えられませんでした"
 	}
 }
 
+// JSON にはなっているが Report ではない出力を「対応不要」として保存しない。
+// 通してしまうと UI が「対応が必要な TODO はありません」と出し、生成の失敗が
+// 静かな誤報に化ける。
+func TestSummarizeRejectsReportShapedNoise(t *testing.T) {
+	script := `#!/bin/sh
+cat > /dev/null
+echo '状況をまとめられませんでした。'
+echo '{"error":"rate limited"}'
+`
+	e, _, cleanup := setupTestEngine(t, &fakeGitHub{}, script)
+	defer cleanup()
+	seedSummaryItems(t, e)
+
+	if err := e.runSummary(context.Background(), Job{Phase: PhaseSummarize}); err != nil {
+		t.Fatalf("サマリ生成に失敗: %v", err)
+	}
+	sums, err := e.st.ListSummaries(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sums) != 1 {
+		t.Fatalf("保存件数が %d", len(sums))
+	}
+	if sums[0].Payload != "" {
+		t.Errorf("Report でない JSON が payload に入っています: %q", sums[0].Payload)
+	}
+	if !strings.Contains(sums[0].Raw, "rate limited") {
+		t.Errorf("生の出力が残っていません: %q", sums[0].Raw)
+	}
+}
+
 // エージェントが失敗しても、パイプラインの状態は動かさない。
 func TestSummarizeFailureDoesNotAffectPipeline(t *testing.T) {
 	fake := &fakeGitHub{}
