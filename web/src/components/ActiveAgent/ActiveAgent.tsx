@@ -53,12 +53,19 @@ export const ActiveAgent: React.FC<ActiveAgentProps> = ({
               <span className="bg-[#21262d] text-[#c9d1d9] border border-[#30363d] px-1.5 py-0.2 rounded text-[11px] font-mono uppercase">
                 {active.phase}
               </span>
-              <button
-                onClick={() => onSelectIssue?.(active.repo, active.issue)}
-                className="font-semibold text-[#f0f6fc] hover:text-[#58a6ff] transition-colors font-mono truncate"
-              >
-                {active.repo} #{active.issue}
-              </button>
+              {/* サマリ生成は特定の Issue に紐づかないので、リンク先を持たない。 */}
+              {active.repo ? (
+                <button
+                  onClick={() => onSelectIssue?.(active.repo, active.issue)}
+                  className="font-semibold text-[#f0f6fc] hover:text-[#58a6ff] transition-colors font-mono truncate"
+                >
+                  {active.repo} #{active.issue}
+                </button>
+              ) : (
+                <span className="font-semibold text-[#f0f6fc] font-mono truncate">
+                  パイプライン全体
+                </span>
+              )}
               <span className="text-[11px] text-[#d29922] font-mono">
                 実行中
               </span>

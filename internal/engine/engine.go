@@ -16,6 +16,7 @@ import (
 
 	"nuage-autopilot2/internal/agent"
 	"nuage-autopilot2/internal/config"
+	"nuage-autopilot2/internal/cron"
 	"nuage-autopilot2/internal/gh"
 	"nuage-autopilot2/internal/store"
 	"nuage-autopilot2/internal/workspace"
@@ -68,6 +69,8 @@ const (
 	PhaseReview        = "review"
 	PhaseTriageReview  = "triage-review"
 	PhaseTriageBlocked = "triage-blocked"
+	// PhaseSummarize は特定の Issue に紐づかない、人間向けサマリの生成。
+	PhaseSummarize = "summarize"
 )
 
 // Engine は常駐ワーカー。
@@ -84,10 +87,15 @@ type Engine struct {
 	events chan Event
 	jobs   chan Job
 
+	// summaryCron は人間向けサマリの起動時刻。設定が空なら nil（summary.go を参照）。
+	summaryCron *cron.Schedule
+
 	mu       sync.Mutex
 	inflight map[string]bool
 	// active は参照 UI 向けに、今処理しているジョブを保持する（web.go を参照）。
 	active *activeRun
+	// summaryNext は次回のサマリ生成の予定時刻。参照 UI の表示にだけ使う。
+	summaryNext time.Time
 }
 
 // New は Engine を組み立てる。GitHub への接続と Project メタ情報の解決まで行う。
@@ -119,6 +127,12 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Engine, er
 		return nil, err
 	}
 
+	// 設定の検証で通っているはずだが、ここでも失敗を握り潰さない。
+	summaryCron, err := cfg.Summary.Cron()
+	if err != nil {
+		return nil, err
+	}
+
 	env := append(os.Environ(), "GH_TOKEN="+client.Token(), "GITHUB_TOKEN="+client.Token())
 	for k, v := range cfg.Env {
 		env = append(env, k+"="+v)
@@ -126,17 +140,19 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger) (*Engine, er
 
 	logDir := filepath.Join(filepath.Dir(cfg.Database), "logs")
 	e := &Engine{
-		cfg:      cfg,
-		st:       st,
-		client:   client,
-		project:  project,
-		ws:       workspace.New(cfg.Workspace, "GH_TOKEN", "", ""),
-		runner:   agent.New(logDir, env),
-		log:      log,
-		env:      env,
-		events:   make(chan Event, 256),
-		jobs:     make(chan Job, 256),
-		inflight: map[string]bool{},
+		cfg:     cfg,
+		st:      st,
+		client:  client,
+		project: project,
+		ws:      workspace.New(cfg.Workspace, "GH_TOKEN", "", ""),
+		runner:  agent.New(logDir, env),
+		log:     log,
+		env:     env,
+
+		summaryCron: summaryCron,
+		events:      make(chan Event, 256),
+		jobs:        make(chan Job, 256),
+		inflight:    map[string]bool{},
 	}
 	// 参照 UI が実行中のプロンプトを読めるよう、ログのパスを受け取る。
 	e.runner.OnStart = e.onAgentStart
@@ -255,6 +271,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	start("reconciler", e.reconcile)
 	start("dispatcher", e.dispatch)
 	start("agent-worker", e.workAgents)
+	start("summary-scheduler", e.scheduleSummaries)
 	start("web", e.serveWeb)
 
 	e.log.Info("ワーカーを起動しました",

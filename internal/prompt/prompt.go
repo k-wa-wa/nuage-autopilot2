@@ -9,6 +9,7 @@ package prompt
 
 import (
 	"embed"
+	"fmt"
 	"strings"
 	"text/template"
 	"time"
@@ -72,6 +73,77 @@ func Implement(c Context) string { return render("implement", c) }
 
 // Review は Verifying でのセルフレビュープロンプトを組み立てる。
 func Review(c Context) string { return render("review", c) }
+
+// SummaryContext は人間向けサマリの生成プロンプトに渡す情報。
+//
+// 個別の Issue ではなくパイプライン全体が対象なので、Context とは別に持つ。
+type SummaryContext struct {
+	GeneratedAt   time.Time
+	ProjectOwner  string
+	ProjectNumber int
+	Repos         []string
+	// Statuses は人間の関与点を説明するために使うレーン名。
+	Statuses SummaryStatuses
+	// Items は未終端のカードのスナップショット。
+	Items []SummaryItem
+	// Truncated は Items を件数で打ち切ったかどうか。
+	Truncated  bool
+	MaxRetries int
+}
+
+// SummaryStatuses はサマリのプロンプトが参照するレーン名。
+type SummaryStatuses struct {
+	Inbox    string
+	Ready    string
+	InReview string
+	Blocked  string
+}
+
+// SummaryItem は 1 枚のカードのローカル状態。
+type SummaryItem struct {
+	Repo          string
+	Issue         int
+	Status        string
+	PRNumber      int
+	RetryCount    int
+	UpdatedAt     time.Time
+	LastRunPhase  string
+	LastRunResult string
+	// Age は Summarize が GeneratedAt との差から埋める表示用の文字列。呼び出し側は設定しない。
+	Age string
+}
+
+// Summarize は人間向けサマリの生成プロンプトを組み立てる。
+func Summarize(c SummaryContext) string {
+	// 滞留の長さは絶対時刻より「どれだけ放置されているか」の方が判断に効く。
+	// テンプレート側で time.Since を呼ぶと生成時刻に依存して出力が揺れるため、
+	// 基準時刻を持つここで文字列にしておく。
+	items := make([]SummaryItem, len(c.Items))
+	copy(items, c.Items)
+	for i := range items {
+		items[i].Age = age(c.GeneratedAt, items[i].UpdatedAt)
+	}
+	c.Items = items
+	return render("summarize", c)
+}
+
+// age は now から見た t の経過時間を日本語にする。
+func age(now, t time.Time) string {
+	if t.IsZero() {
+		return "不明"
+	}
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "たった今"
+	case d < time.Hour:
+		return fmt.Sprintf("%d 分前", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d 時間前", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d 日前", int(d.Hours()/24))
+	}
+}
 
 // Notice はワーカーが Issue に投稿する通知文の組み立てに必要な情報。
 type Notice struct {

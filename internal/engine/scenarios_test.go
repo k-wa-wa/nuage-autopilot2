@@ -295,7 +295,9 @@ func setupTestEngine(t *testing.T, fake *fakeGitHub, fakeAgentScript string) (*E
 			config.AgentImplement: {Command: scriptPath, Timeout: 10 * time.Second},
 			config.AgentReview:    {Command: scriptPath, Timeout: 10 * time.Second},
 			config.AgentTriage:    {Command: scriptPath, Timeout: 10 * time.Second},
+			config.AgentSummarize: {Command: scriptPath, Timeout: 10 * time.Second},
 		},
+		Summary: config.Summary{Keep: config.DefaultSummaryKeep},
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

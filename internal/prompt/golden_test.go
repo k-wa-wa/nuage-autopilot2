@@ -60,6 +60,45 @@ func minimal() Context {
 	}
 }
 
+// summaryStatuses はサマリのプロンプトが参照するレーン名。
+var summaryStatuses = SummaryStatuses{
+	Inbox: "📥 Inbox", Ready: "🎯 Ready", InReview: "👀 In Review", Blocked: "⏸ Blocked",
+}
+
+// summaryBase は経過時間の各分岐（分・時間・日・不明）を踏むサマリ用の Context。
+func summaryBase() SummaryContext {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	return SummaryContext{
+		GeneratedAt:   now,
+		ProjectOwner:  "k-wa-wa",
+		ProjectNumber: 1,
+		Repos:         []string{"k-wa-wa/example", "k-wa-wa/other"},
+		Statuses:      summaryStatuses,
+		MaxRetries:    5,
+		Truncated:     true,
+		Items: []SummaryItem{
+			{Repo: "k-wa-wa/example", Issue: 12, Status: "👀 In Review", PRNumber: 34,
+				UpdatedAt: now.Add(-30 * time.Minute), LastRunPhase: "review", LastRunResult: "ok"},
+			{Repo: "k-wa-wa/example", Issue: 13, Status: "⏸ Blocked", RetryCount: 5,
+				UpdatedAt: now.Add(-50 * time.Hour), LastRunPhase: "implement", LastRunResult: "error: timeout"},
+			{Repo: "k-wa-wa/other", Issue: 1, Status: "📥 Inbox", UpdatedAt: now.Add(-3 * time.Hour)},
+			{Repo: "k-wa-wa/other", Issue: 2, Status: "🚧 In Progress"},
+		},
+	}
+}
+
+// summaryEmpty は進行中のカードが無い場合。
+func summaryEmpty() SummaryContext {
+	return SummaryContext{
+		GeneratedAt:   time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		ProjectOwner:  "k-wa-wa",
+		ProjectNumber: 1,
+		Repos:         []string{"k-wa-wa/example"},
+		Statuses:      summaryStatuses,
+		MaxRetries:    5,
+	}
+}
+
 func withIssueBody(c Context, body string) Context {
 	issue := *c.Issue
 	issue.Body = body
@@ -78,6 +117,8 @@ func goldenCases() map[string]func() string {
 	reviewBlankGate.Gate = "   \n  "
 
 	return map[string]func() string{
+		"summarize_full":         func() string { return Summarize(summaryBase()) },
+		"summarize_empty":        func() string { return Summarize(summaryEmpty()) },
 		"refine_full":            func() string { return Refine(base()) },
 		"refine_minimal":         func() string { return Refine(minimal()) },
 		"refine_empty_body":      func() string { return Refine(withIssueBody(base(), "   ")) },

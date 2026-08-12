@@ -12,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"nuage-autopilot2/internal/agent"
+	"nuage-autopilot2/internal/cron"
 )
 
 // Config はワーカー全体の設定。
@@ -31,6 +32,29 @@ type Config struct {
 	Agents   map[string]Agent  `yaml:"agents"`
 	Env      map[string]string `yaml:"env"`
 	Web      Web               `yaml:"web"`
+	Summary  Summary           `yaml:"summary"`
+}
+
+// Summary は人間向けサマリの定期生成の設定。
+//
+// パイプラインの状態遷移には一切関与しない。決まった時刻に状態を要約して
+// 参照 UI に置くだけの、独立した仕組みである。
+type Summary struct {
+	// Schedule は起動時刻を表す cron 式（分 時 日 月 曜日）。空なら生成しない。
+	Schedule string `yaml:"schedule"`
+	// Keep は保持する生成結果の件数。0 なら DefaultSummaryKeep。
+	Keep int `yaml:"keep"`
+}
+
+// DefaultSummaryKeep はサマリの既定の保持件数。
+const DefaultSummaryKeep = 30
+
+// Cron は解釈済みの cron 式を返す。Schedule が空なら (nil, nil)。
+func (s Summary) Cron() (*cron.Schedule, error) {
+	if strings.TrimSpace(s.Schedule) == "" {
+		return nil, nil
+	}
+	return cron.Parse(s.Schedule)
 }
 
 // Web は状態を参照するための HTTP サーバの設定。
@@ -141,10 +165,11 @@ const (
 	AgentImplement = "implement"
 	AgentReview    = "review"
 	AgentTriage    = "triage"
+	AgentSummarize = "summarize"
 )
 
 // AgentUses は設定を持つ用途の一覧。
-var AgentUses = []string{AgentRefine, AgentImplement, AgentReview, AgentTriage}
+var AgentUses = []string{AgentRefine, AgentImplement, AgentReview, AgentTriage, AgentSummarize}
 
 // Load は設定ファイルを読み、既定値の補完と検証を行う。
 func Load(path string) (*Config, error) {
@@ -212,6 +237,10 @@ func (c *Config) applyDefaults() error {
 	setDefaultDuration(&c.Limits.AgentTimeout, 30*time.Minute)
 	setDefaultDuration(&c.Limits.VerifyWait, 1*time.Hour)
 
+	if c.Summary.Keep == 0 {
+		c.Summary.Keep = DefaultSummaryKeep
+	}
+
 	if c.Agents == nil {
 		c.Agents = map[string]Agent{}
 	}
@@ -247,6 +276,10 @@ func (c *Config) validate() error {
 		if _, _, err := net.SplitHostPort(addr); err != nil {
 			return fmt.Errorf("web.addr は host:port の形式で指定してください: %w", err)
 		}
+	}
+	// cron 式の間違いは次回起動時刻の計算まで表面化しないため、起動前に弾く。
+	if _, err := c.Summary.Cron(); err != nil {
+		return fmt.Errorf("summary.schedule が不正です: %w", err)
 	}
 	// 用途キーの打ち間違いは黙って無視されるため、起動時に弾く。
 	known := map[string]bool{}

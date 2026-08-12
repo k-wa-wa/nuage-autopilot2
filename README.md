@@ -79,6 +79,11 @@ go build -o autopilot ./cmd/autopilot
 - DB マイグレーションを含む場合はロールバック手順を PR 本文に書くこと
 ```
 
+## TODO の定期サマリ
+
+`config.yaml` に cron 式を書くと、その時刻に読み取り専用のエージェントが起動し、
+パイプラインの現況から **対応待ちの TODO** を抜き出して参照 UI の先頭に表示する。
+
 ## コマンド
 
 | コマンド | 役割 |
@@ -87,13 +92,14 @@ go build -o autopilot ./cmd/autopilot
 | `autopilot run` | 常駐してパイプラインを回す |
 | `autopilot init` | コールドスタートのシード |
 | `autopilot status` | ローカル状態（Status / PR / ブランチ / リトライ回数）の一覧 |
+| `autopilot summarize` | TODO サマリをその場で 1 回生成する |
 | `autopilot doctor` | 設定と前提条件の検証 |
 
 共通フラグ: `-c, --config <path>`（既定 `config.yaml`）、`-v, --verbose`
 
 ## エージェントの差し替え
 
-用途（`refine` / `implement` / `review` / `triage`）ごとに CLI を選べる。
+用途（`refine` / `implement` / `review` / `triage` / `summarize`）ごとに CLI を選べる。
 **`command` から起動方法を解決する**ので、指定するのはコマンド名だけでよい。
 非対話モードや権限スキップなどの必須フラグは自動で付く。
 

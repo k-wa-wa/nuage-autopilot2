@@ -5,6 +5,7 @@ import {
   mockItemDetail,
   mockRunDetail,
   mockLogChunk,
+  mockSummary,
 } from './fixtures';
 
 export const handlers = [
@@ -35,6 +36,18 @@ export const handlers = [
       return HttpResponse.json({ error: 'id を指定してください' }, { status: 400 });
     }
     return HttpResponse.json(mockRunDetail);
+  }),
+
+  http.get('/api/summary', ({ request }) => {
+    const url = new URL(request.url);
+    const id = Number(url.searchParams.get('id'));
+    if (id) {
+      const found = mockSummary.history.find((h) => h.id === id);
+      if (!found) {
+        return HttpResponse.json({ error: 'サマリは見つかりません' }, { status: 404 });
+      }
+    }
+    return HttpResponse.json(mockSummary);
   }),
 
   http.get('/api/run/log', ({ request }) => {
